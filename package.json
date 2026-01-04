@@ -1,0 +1,35 @@
+{
+  "name": "opencode-browser",
+  "version": "1.0.0",
+  "description": "Browser automation for OpenCode via Chrome extension + Native Messaging. Inspired by Claude in Chrome.",
+  "type": "module",
+  "bin": {
+    "opencode-browser": "./bin/cli.js"
+  },
+  "main": "./src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "install-extension": "node bin/cli.js install"
+  },
+  "keywords": [
+    "opencode",
+    "browser",
+    "automation",
+    "chrome",
+    "mcp",
+    "claude"
+  ],
+  "author": "Benjamin Shafii",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benjaminshafii/opencode-browser.git"
+  },
+  "bugs": {
+    "url": "https://github.com/benjaminshafii/opencode-browser/issues"
+  },
+  "homepage": "https://github.com/benjaminshafii/opencode-browser#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
