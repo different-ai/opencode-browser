@@ -383,6 +383,9 @@ async function toolExecuteScript({ code, tabId }) {
 async function toolScroll({ x = 0, y = 0, selector, tabId }) {
   const tab = await getTabById(tabId);
   
+  // Ensure selector is null (not undefined) for proper serialization
+  const sel = selector || null;
+  
   await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     func: (scrollX, scrollY, sel) => {
@@ -395,10 +398,10 @@ async function toolScroll({ x = 0, y = 0, selector, tabId }) {
       }
       window.scrollBy(scrollX, scrollY);
     },
-    args: [x, y, selector]
+    args: [x, y, sel]
   });
   
-  return `Scrolled ${selector ? `to ${selector}` : `by (${x}, ${y})`}`;
+  return `Scrolled ${sel ? `to ${sel}` : `by (${x}, ${y})`}`;
 }
 
 async function toolWait({ ms = 1000 }) {

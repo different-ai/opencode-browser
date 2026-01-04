@@ -1,5 +1,5 @@
 {
-  "name": "opencode-browser",
+  "name": "@different-ai/opencode-browser",
   "version": "1.0.0",
   "description": "Browser automation for OpenCode via Chrome extension + Native Messaging. Inspired by Claude in Chrome.",
   "type": "module",
