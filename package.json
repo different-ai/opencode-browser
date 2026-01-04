@@ -23,12 +23,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/benjaminshafii/opencode-browser.git"
+    "url": "git+https://github.com/different-ai/opencode-browser.git"
   },
   "bugs": {
-    "url": "https://github.com/benjaminshafii/opencode-browser/issues"
+    "url": "https://github.com/different-ai/opencode-browser/issues"
   },
-  "homepage": "https://github.com/benjaminshafii/opencode-browser#readme",
+  "homepage": "https://github.com/different-ai/opencode-browser#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
   }
