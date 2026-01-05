@@ -19,9 +19,11 @@ import { join } from "path";
 const WS_PORT = 19222;
 const BASE_DIR = join(homedir(), ".opencode-browser");
 const LOCK_FILE = join(BASE_DIR, "lock.json");
+const SCREENSHOTS_DIR = join(BASE_DIR, "screenshots");
 
-// Ensure base dir exists
+// Ensure directories exist
 mkdirSync(BASE_DIR, { recursive: true });
+mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
 // Session state
 const sessionId = Math.random().toString(36).slice(2);
@@ -376,17 +378,26 @@ export const BrowserPlugin: Plugin = async (ctx) => {
       }),
 
       browser_screenshot: tool({
-        description: "Take a screenshot of the current page",
+        description: "Take a screenshot of the current page. Saves to ~/.opencode-browser/screenshots/ and returns the file path.",
         args: {
           tabId: tool.schema.optional(tool.schema.number({ description: "Optional tab ID" })),
+          name: tool.schema.optional(tool.schema.string({ description: "Optional name for the screenshot file (without extension)" })),
         },
         async execute(args) {
           const result = await executeCommand("screenshot", args);
-          // Return as base64 image
+          
           if (result && result.startsWith("data:image")) {
+            // Extract base64 data and save to file
             const base64Data = result.replace(/^data:image\/\w+;base64,/, "");
-            return { type: "image", data: base64Data, mimeType: "image/png" };
+            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+            const filename = args.name ? `${args.name}.png` : `screenshot-${timestamp}.png`;
+            const filepath = join(SCREENSHOTS_DIR, filename);
+            
+            writeFileSync(filepath, Buffer.from(base64Data, "base64"));
+            
+            return `Screenshot saved: ${filepath}`;
           }
+          
           return result;
         },
       }),
