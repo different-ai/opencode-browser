@@ -1,61 +1,47 @@
 # OpenCode Browser
 
-Browser automation for [OpenCode](https://github.com/opencode-ai/opencode) via Chrome extension + Native Messaging.
+Browser automation plugin for [OpenCode](https://github.com/opencode-ai/opencode).
 
-**Inspired by Claude in Chrome** - Anthropic's browser extension that lets Claude Code test code directly in the browser and see client-side errors via console logs. This project brings similar capabilities to OpenCode.
+Control your real Chrome browser with existing logins, cookies, and bookmarks. No DevTools Protocol, no security prompts.
 
 ## Why?
 
-Get access to your fully credentialed chrome instance to perform privileged web operations.
+Chrome 136+ blocks `--remote-debugging-port` on your default profile for security reasons. DevTools-based automation (like Playwright) triggers a security prompt every time.
 
-Chrome 136+ blocks `--remote-debugging-port` on your default profile for security reasons. This means DevTools-based automation (like Playwright or chrome-devtools-mcp) triggers a security prompt every time.
-
-OpenCode Browser bypasses this entirely using Chrome's Native Messaging API - the same approach Claude uses. Your automation works with your existing browser session, logins, and bookmarks. No prompts. No separate profiles.
+OpenCode Browser uses a simple WebSocket connection between an OpenCode plugin and a Chrome extension. Your automation works with your existing browser session - no prompts, no separate profiles.
 
 ## Installation
 
 ```bash
-npx opencode-browser install
+npx @different-ai/opencode-browser install
 ```
 
 The installer will:
 1. Copy the extension to `~/.opencode-browser/extension/`
-2. Open Chrome for you to load the extension
-3. Register the native messaging host
-4. Optionally update your `opencode.json`
+2. Guide you to load the extension in Chrome
+3. Update your `opencode.json` to use the plugin
 
-## Manual Setup
+## Configuration
 
-If you prefer manual installation:
+Add to your `opencode.json`:
 
-1. **Load the extension**
-   - Go to `chrome://extensions`
-   - Enable "Developer mode"
-   - Click "Load unpacked" and select `~/.opencode-browser/extension/`
-   - Copy the extension ID
+```json
+{
+  "plugin": ["@different-ai/opencode-browser"]
+}
+```
 
-2. **Run the installer** to register the native host:
-   ```bash
-   npx opencode-browser install
-   ```
-
-3. **Add to opencode.json**:
-   ```json
-   {
-     "mcp": {
-       "browser": {
-         "type": "local",
-         "command": ["npx", "opencode-browser", "start"],
-         "enabled": true
-       }
-     }
-   }
-   ```
+Then load the extension in Chrome:
+1. Go to `chrome://extensions`
+2. Enable "Developer mode"
+3. Click "Load unpacked" and select `~/.opencode-browser/extension/`
 
 ## Available Tools
 
 | Tool | Description |
 |------|-------------|
+| `browser_status` | Check if browser is available or locked |
+| `browser_kill_session` | Take over from another OpenCode session |
 | `browser_navigate` | Navigate to a URL |
 | `browser_click` | Click an element by CSS selector |
 | `browser_type` | Type text into an input field |
@@ -66,33 +52,73 @@ If you prefer manual installation:
 | `browser_wait` | Wait for a duration |
 | `browser_execute` | Run JavaScript in page context |
 
+## Multi-Session Support
+
+Only one OpenCode session can use the browser at a time. This prevents conflicts when you have multiple terminals open.
+
+- `browser_status` - Check who has the lock
+- `browser_kill_session` - Kill the other session and take over
+
+In your prompts, you can say:
+- "If browser is locked, kill the session and proceed"
+- "If browser is locked, skip this task"
+
 ## Architecture
 
 ```
-OpenCode ──MCP──> server.js ──Unix Socket──> host.js ──Native Messaging──> Chrome Extension
-                                                                                  │
-                                                                                  ▼
-                                                                            chrome.tabs
-                                                                            chrome.scripting
+OpenCode Plugin ◄──WebSocket:19222──► Chrome Extension
+       │                                    │
+       └── Lock file                        └── chrome.tabs, chrome.scripting
 ```
 
-- **server.js** - MCP server that OpenCode connects to
-- **host.js** - Native messaging host launched by Chrome
-- **extension/** - Chrome extension with browser automation tools
+**Two components:**
+1. OpenCode plugin (runs WebSocket server, defines tools)
+2. Chrome extension (connects to plugin, executes commands)
 
-No DevTools Protocol = No security prompts.
+**No daemon. No MCP server. No native messaging host.**
+
+## Upgrading from v1.x
+
+v2.0 is a complete rewrite with a simpler architecture:
+
+1. Run `npx @different-ai/opencode-browser install` (cleans up old daemon automatically)
+2. Replace MCP config with plugin config in `opencode.json`:
+
+```diff
+- "mcp": {
+-   "browser": {
+-     "type": "local",
+-     "command": ["npx", "@different-ai/opencode-browser", "start"],
+-     "enabled": true
+-   }
+- }
++ "plugin": ["@different-ai/opencode-browser"]
+```
+
+3. Restart OpenCode
+
+## Troubleshooting
+
+**"Chrome extension not connected"**
+- Make sure Chrome is running
+- Check that the extension is loaded and enabled
+- Click the extension icon to see connection status
+
+**"Browser locked by another session"**
+- Use `browser_kill_session` to take over
+- Or close the other OpenCode session
+
+**"Failed to start WebSocket server"**
+- Port 19222 may be in use
+- Check if another OpenCode session is running
 
 ## Uninstall
 
 ```bash
-npx opencode-browser uninstall
+npx @different-ai/opencode-browser uninstall
 ```
 
 Then remove the extension from Chrome and delete `~/.opencode-browser/` if desired.
-
-## Logs
-
-Logs are written to `~/.opencode-browser/logs/browser-mcp-host.log`
 
 ## Platform Support
 

@@ -1,14 +1,23 @@
 {
   "name": "@different-ai/opencode-browser",
-  "version": "1.0.5",
-  "description": "Browser automation for OpenCode via Chrome extension + Native Messaging. Inspired by Claude in Chrome.",
+  "version": "2.0.0",
+  "description": "Browser automation plugin for OpenCode. Control your real Chrome browser with existing logins and cookies.",
   "type": "module",
   "bin": {
     "opencode-browser": "./bin/cli.js"
   },
-  "main": "./src/server.js",
+  "main": "./src/plugin.ts",
+  "exports": {
+    ".": "./src/plugin.ts",
+    "./plugin": "./src/plugin.ts"
+  },
+  "files": [
+    "bin",
+    "src",
+    "extension",
+    "README.md"
+  ],
   "scripts": {
-    "start": "node src/server.js",
     "install-extension": "node bin/cli.js install"
   },
   "keywords": [
@@ -16,8 +25,7 @@
     "browser",
     "automation",
     "chrome",
-    "mcp",
-    "claude"
+    "plugin"
   ],
   "author": "Benjamin Shafii",
   "license": "MIT",
@@ -29,8 +37,11 @@
     "url": "https://github.com/different-ai/opencode-browser/issues"
   },
   "homepage": "https://github.com/different-ai/opencode-browser#readme",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "ws": "^8.18.3"
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "*",
+    "bun-types": "*"
   }
 }

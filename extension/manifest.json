@@ -1,13 +1,12 @@
 {
   "manifest_version": 3,
   "name": "OpenCode Browser Automation",
-  "version": "1.0.0",
-  "description": "Browser automation for OpenCode via Native Messaging",
+  "version": "2.0.0",
+  "description": "Browser automation for OpenCode",
   "permissions": [
     "tabs",
     "activeTab",
     "scripting",
-    "nativeMessaging",
     "storage",
     "notifications",
     "alarms"

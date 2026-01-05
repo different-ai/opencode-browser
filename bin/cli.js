@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 /**
  * OpenCode Browser - CLI Installer
- * 
- * Installs the Chrome extension and native messaging host for browser automation.
+ *
+ * Installs the Chrome extension for browser automation.
+ * v2.0: Plugin-based architecture (no daemon, no MCP server)
  */
 
-import { createInterface } from "readline";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, readdirSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, readdirSync, unlinkSync } from "fs";
 import { homedir, platform } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execSync } from "child_process";
+import { createInterface } from "readline";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -35,20 +36,20 @@ function log(msg) {
 }
 
 function success(msg) {
-  console.log(color("green", "✓ " + msg));
+  console.log(color("green", "  " + msg));
 }
 
 function warn(msg) {
-  console.log(color("yellow", "⚠ " + msg));
+  console.log(color("yellow", "  " + msg));
 }
 
 function error(msg) {
-  console.log(color("red", "✗ " + msg));
+  console.log(color("red", "  " + msg));
 }
 
 function header(msg) {
   console.log("\n" + color("cyan", color("bright", msg)));
-  console.log(color("cyan", "─".repeat(msg.length)));
+  console.log(color("cyan", "-".repeat(msg.length)));
 }
 
 const rl = createInterface({
@@ -71,12 +72,8 @@ async function confirm(question) {
 
 async function main() {
   console.log(`
-${color("cyan", color("bright", "╔═══════════════════════════════════════════════════════════╗"))}
-${color("cyan", color("bright", "║"))}        ${color("bright", "OpenCode Browser")} - Browser Automation for OpenCode       ${color("cyan", color("bright", "║"))}
-${color("cyan", color("bright", "║"))}                                                           ${color("cyan", color("bright", "║"))}
-${color("cyan", color("bright", "║"))}  Inspired by Claude in Chrome - browser automation that   ${color("cyan", color("bright", "║"))}
-${color("cyan", color("bright", "║"))}  works with your existing logins and bookmarks.           ${color("cyan", color("bright", "║"))}
-${color("cyan", color("bright", "╚═══════════════════════════════════════════════════════════╝"))}
+${color("cyan", color("bright", "OpenCode Browser v2.0"))}
+${color("cyan", "Browser automation for OpenCode")}
 `);
 
   const command = process.argv[2];
@@ -85,28 +82,18 @@ ${color("cyan", color("bright", "╚══════════════�
     await install();
   } else if (command === "uninstall") {
     await uninstall();
-  } else if (command === "daemon") {
-    await startDaemon();
-  } else if (command === "daemon-install") {
-    await installDaemon();
-  } else if (command === "start") {
-    rl.close();
-    await import("../src/server.js");
-    return;
+  } else if (command === "status") {
+    await status();
   } else {
     log(`
 ${color("bright", "Usage:")}
-  npx @different-ai/opencode-browser install         Install extension
-  npx @different-ai/opencode-browser daemon-install  Install background daemon
-  npx @different-ai/opencode-browser daemon          Run daemon (foreground)
-  npx @different-ai/opencode-browser start           Run MCP server
-  npx @different-ai/opencode-browser uninstall       Remove installation
+  npx @different-ai/opencode-browser install     Install extension
+  npx @different-ai/opencode-browser uninstall   Remove installation
+  npx @different-ai/opencode-browser status      Check lock status
 
-${color("bright", "With bun:")}
-  bunx @different-ai/opencode-browser install
-
-${color("bright", "For scheduled jobs:")}
-  Run 'daemon-install' to enable browser tools in background jobs.
+${color("bright", "v2.0 Changes:")}
+  - Plugin-based architecture (no daemon needed)
+  - Add plugin to opencode.json, load extension in Chrome, done
 `);
   }
 
@@ -124,7 +111,7 @@ async function install() {
   }
   success(`Platform: ${os === "darwin" ? "macOS" : "Linux"}`);
 
-  header("Step 2: Install Extension Directory");
+  header("Step 2: Copy Extension Files");
 
   const extensionDir = join(homedir(), ".opencode-browser", "extension");
   const srcExtensionDir = join(PACKAGE_ROOT, "extension");
@@ -135,7 +122,7 @@ async function install() {
   for (const file of files) {
     const srcPath = join(srcExtensionDir, file);
     const destPath = join(extensionDir, file);
-    
+
     try {
       const stat = readdirSync(srcPath);
       mkdirSync(destPath, { recursive: true });
@@ -147,7 +134,7 @@ async function install() {
 
   success(`Extension files copied to: ${extensionDir}`);
 
-  header("Step 3: Load Extension in Browser");
+  header("Step 3: Load Extension in Chrome");
 
   log(`
 Works with: ${color("cyan", "Chrome")}, ${color("cyan", "Brave")}, ${color("cyan", "Arc")}, ${color("cyan", "Edge")}, and other Chromium browsers.
@@ -164,281 +151,194 @@ To load the extension:
 4. Select this folder:
    ${color("cyan", extensionDir)}
    ${os === "darwin" ? color("yellow", "Tip: Press Cmd+Shift+G and paste the path above") : ""}
-
-5. Copy the ${color("bright", "Extension ID")} shown under the extension name
-   (looks like: abcdefghijklmnopqrstuvwxyz123456)
 `);
 
-  log("");
-  const extensionId = await ask(color("bright", "Enter your Extension ID: "));
+  await ask(color("bright", "Press Enter when you've loaded the extension..."));
 
-  if (!extensionId) {
-    error("Extension ID is required");
-    process.exit(1);
-  }
+  header("Step 4: Configure OpenCode");
 
-  if (!/^[a-z]{32}$/.test(extensionId)) {
-    warn("Extension ID format looks unusual (expected 32 lowercase letters)");
-    const proceed = await confirm("Continue anyway?");
-    if (!proceed) process.exit(1);
-  }
-
-  header("Step 4: Register Native Messaging Host");
-
-  const nativeHostDir = os === "darwin"
-    ? join(homedir(), "Library", "Application Support", "Google", "Chrome", "NativeMessagingHosts")
-    : join(homedir(), ".config", "google-chrome", "NativeMessagingHosts");
-
-  mkdirSync(nativeHostDir, { recursive: true });
-
-  const nodePath = process.execPath;
-  const hostScriptPath = join(PACKAGE_ROOT, "src", "host.js");
-
-  const wrapperDir = join(homedir(), ".opencode-browser");
-  const wrapperPath = join(wrapperDir, "host-wrapper.sh");
-  
-  writeFileSync(wrapperPath, `#!/bin/bash
-exec "${nodePath}" "${hostScriptPath}" "$@"
-`, { mode: 0o755 });
-
-  const manifest = {
-    name: "com.opencode.browser_automation",
-    description: "OpenCode Browser Automation Native Messaging Host",
-    path: wrapperPath,
-    type: "stdio",
-    allowed_origins: [`chrome-extension://${extensionId}/`],
-  };
-
-  const manifestPath = join(nativeHostDir, "com.opencode.browser_automation.json");
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-
-  success(`Native host registered at: ${manifestPath}`);
-
-  const logsDir = join(homedir(), ".opencode-browser", "logs");
-  mkdirSync(logsDir, { recursive: true });
-
-  header("Step 5: Install Background Daemon");
-
-  if (os === "darwin") {
-    const daemonPath = join(PACKAGE_ROOT, "src", "daemon.js");
-    
-    const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.opencode.browser-daemon</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${nodePath}</string>
-    <string>${daemonPath}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>${logsDir}/daemon.log</string>
-  <key>StandardErrorPath</key>
-  <string>${logsDir}/daemon.log</string>
-</dict>
-</plist>`;
-
-    const plistPath = join(homedir(), "Library", "LaunchAgents", "com.opencode.browser-daemon.plist");
-    writeFileSync(plistPath, plist);
-    
-    try {
-      execSync(`launchctl unload "${plistPath}" 2>/dev/null || true`, { stdio: "ignore" });
-      execSync(`launchctl load "${plistPath}"`, { stdio: "ignore" });
-      success("Daemon installed and started");
-    } catch (e) {
-      warn("Could not start daemon automatically. Run: launchctl load " + plistPath);
-    }
-  } else {
-    warn("On Linux, create a systemd service for the daemon manually.");
-    log(`Daemon script: ${join(PACKAGE_ROOT, "src", "daemon.js")}`);
-  }
-
-  header("Step 6: Configure OpenCode");
-
-  const serverPath = join(PACKAGE_ROOT, "src", "server.js");
-  const mcpConfig = {
-    browser: {
-      type: "local",
-      command: ["node", serverPath],
-      enabled: true,
-    },
-  };
+  const pluginConfig = `{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["@different-ai/opencode-browser"]
+}`;
 
   log(`
-Add this to your ${color("cyan", "opencode.json")} under "mcp":
+Add the plugin to your ${color("cyan", "opencode.json")}:
 
-${color("bright", JSON.stringify(mcpConfig, null, 2))}
+${color("bright", pluginConfig)}
+
+Or if you already have an opencode.json, just add to the "plugin" array:
+${color("bright", '"plugin": ["@different-ai/opencode-browser"]')}
 `);
 
   const opencodeJsonPath = join(process.cwd(), "opencode.json");
-  let shouldUpdateConfig = false;
 
   if (existsSync(opencodeJsonPath)) {
-    shouldUpdateConfig = await confirm(`Found opencode.json in current directory. Add browser config automatically?`);
-    
-    if (shouldUpdateConfig) {
+    const shouldUpdate = await confirm(`Found opencode.json. Add plugin automatically?`);
+
+    if (shouldUpdate) {
       try {
         const config = JSON.parse(readFileSync(opencodeJsonPath, "utf-8"));
-        config.mcp = config.mcp || {};
-        config.mcp.browser = mcpConfig.browser;
+        config.plugin = config.plugin || [];
+        if (!config.plugin.includes("@different-ai/opencode-browser")) {
+          config.plugin.push("@different-ai/opencode-browser");
+        }
+        // Remove old MCP config if present
+        if (config.mcp?.browser) {
+          delete config.mcp.browser;
+          if (Object.keys(config.mcp).length === 0) {
+            delete config.mcp;
+          }
+          warn("Removed old MCP browser config (replaced by plugin)");
+        }
         writeFileSync(opencodeJsonPath, JSON.stringify(config, null, 2) + "\n");
-        success("Updated opencode.json with browser MCP config");
+        success("Updated opencode.json with plugin");
       } catch (e) {
         error(`Failed to update opencode.json: ${e.message}`);
-        log("Please add the config manually.");
+        log("Please add the plugin manually.");
       }
     }
   } else {
-    const shouldCreate = await confirm(`No opencode.json found. Create one with browser config?`);
-    
+    const shouldCreate = await confirm(`No opencode.json found. Create one?`);
+
     if (shouldCreate) {
       try {
-        const config = { "$schema": "https://opencode.ai/config.json", mcp: mcpConfig };
+        const config = {
+          $schema: "https://opencode.ai/config.json",
+          plugin: ["@different-ai/opencode-browser"],
+        };
         writeFileSync(opencodeJsonPath, JSON.stringify(config, null, 2) + "\n");
-        success("Created opencode.json with browser MCP config");
-        shouldUpdateConfig = true;
+        success("Created opencode.json with plugin");
       } catch (e) {
         error(`Failed to create opencode.json: ${e.message}`);
       }
-    } else {
-      log(`Add the config above to your project's opencode.json manually.`);
     }
+  }
+
+  // Clean up old daemon if present
+  header("Step 5: Cleanup (v1.x migration)");
+
+  const oldDaemonPlist = join(homedir(), "Library", "LaunchAgents", "com.opencode.browser-daemon.plist");
+  if (existsSync(oldDaemonPlist)) {
+    try {
+      execSync(`launchctl unload "${oldDaemonPlist}" 2>/dev/null || true`, { stdio: "ignore" });
+      unlinkSync(oldDaemonPlist);
+      success("Removed old daemon (no longer needed in v2.0)");
+    } catch {
+      warn("Could not remove old daemon plist. Remove manually if needed.");
+    }
+  } else {
+    success("No old daemon to clean up");
   }
 
   header("Installation Complete!");
 
   log(`
-${color("green", "✓")} Extension installed at: ${extensionDir}
-${color("green", "✓")} Native host registered
-${shouldUpdateConfig ? color("green", "✓") + " opencode.json updated" : color("yellow", "○") + " Remember to update opencode.json"}
+${color("green", "")} Extension: ${extensionDir}
+${color("green", "")} Plugin: @different-ai/opencode-browser
 
-${color("bright", "Next steps:")}
-1. ${color("cyan", "Restart Chrome")} (close all windows and reopen)
-2. Click the extension icon to verify connection
-3. Restart OpenCode to load the new MCP server
+${color("bright", "How it works:")}
+  1. OpenCode loads the plugin on startup
+  2. Plugin starts WebSocket server on port 19222
+  3. Chrome extension connects automatically
+  4. Browser tools are available!
 
 ${color("bright", "Available tools:")}
-  browser_navigate   - Go to a URL
-  browser_click      - Click an element
-  browser_type       - Type into an input
-  browser_screenshot - Capture the page
-  browser_snapshot   - Get accessibility tree
-  browser_get_tabs   - List open tabs
-  browser_scroll     - Scroll the page
-  browser_wait       - Wait for duration
-  browser_execute    - Run JavaScript
+  browser_status      - Check if browser is available
+  browser_kill_session - Take over from another session
+  browser_navigate    - Go to a URL
+  browser_click       - Click an element
+  browser_type        - Type into an input
+  browser_screenshot  - Capture the page
+  browser_snapshot    - Get accessibility tree
+  browser_get_tabs    - List open tabs
+  browser_scroll      - Scroll the page
+  browser_wait        - Wait for duration
+  browser_execute     - Run JavaScript
 
-${color("bright", "Logs:")} ~/.opencode-browser/logs/
+${color("bright", "Multi-session:")}
+  Only one OpenCode session can use browser at a time.
+  Use browser_status to check, browser_kill_session to take over.
 
-${color("bright", "Test it out:")}
-  Open OpenCode and try: ${color("cyan", '"Navigate to google.com and take a snapshot"')}
+${color("bright", "Test it:")}
+  Restart OpenCode and try: ${color("cyan", '"Check browser status"')}
 `);
 }
 
-async function startDaemon() {
-  const { spawn } = await import("child_process");
-  const daemonPath = join(PACKAGE_ROOT, "src", "daemon.js");
-  log("Starting daemon...");
-  const child = spawn(process.execPath, [daemonPath], { stdio: "inherit" });
-  child.on("exit", (code) => process.exit(code || 0));
-}
+async function status() {
+  header("Browser Lock Status");
 
-async function installDaemon() {
-  header("Installing Background Daemon");
-  
-  const os = platform();
-  if (os !== "darwin") {
-    error("Daemon auto-install currently supports macOS only");
-    log("On Linux, create a systemd service manually.");
-    process.exit(1);
+  const lockFile = join(homedir(), ".opencode-browser", "lock.json");
+
+  if (!existsSync(lockFile)) {
+    success("Browser available (no lock file)");
+    return;
   }
-  
-  const nodePath = process.execPath;
-  const daemonPath = join(PACKAGE_ROOT, "src", "daemon.js");
-  const logsDir = join(homedir(), ".opencode-browser", "logs");
-  
-  mkdirSync(logsDir, { recursive: true });
-  
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.opencode.browser-daemon</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${nodePath}</string>
-    <string>${daemonPath}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>${logsDir}/daemon.log</string>
-  <key>StandardErrorPath</key>
-  <string>${logsDir}/daemon.log</string>
-</dict>
-</plist>`;
 
-  const plistPath = join(homedir(), "Library", "LaunchAgents", "com.opencode.browser-daemon.plist");
-  writeFileSync(plistPath, plist);
-  success(`Created launchd plist: ${plistPath}`);
-  
   try {
-    execSync(`launchctl unload "${plistPath}" 2>/dev/null || true`);
-    execSync(`launchctl load "${plistPath}"`);
-    success("Daemon started");
-  } catch (e) {
-    error(`Failed to load daemon: ${e.message}`);
-  }
-  
-  log(`
-${color("green", "✓")} Daemon installed and running
+    const lock = JSON.parse(readFileSync(lockFile, "utf-8"));
+    log(`
+Lock file: ${lockFile}
 
-The daemon bridges Chrome extension ↔ MCP server.
-It runs automatically on login and enables browser
-tools in scheduled OpenCode jobs.
-
-${color("bright", "Logs:")} ${logsDir}/daemon.log
-
-${color("bright", "Control:")}
-  launchctl stop com.opencode.browser-daemon
-  launchctl start com.opencode.browser-daemon
-  launchctl unload ~/Library/LaunchAgents/com.opencode.browser-daemon.plist
+PID: ${lock.pid}
+Session: ${lock.sessionId}
+Started: ${lock.startedAt}
+Working directory: ${lock.cwd}
 `);
+
+    // Check if process is alive
+    try {
+      process.kill(lock.pid, 0);
+      warn(`Process ${lock.pid} is running. Browser is locked.`);
+    } catch {
+      success(`Process ${lock.pid} is dead. Lock is stale and will be auto-cleaned.`);
+    }
+  } catch (e) {
+    error(`Could not read lock file: ${e.message}`);
+  }
 }
 
 async function uninstall() {
   header("Uninstalling OpenCode Browser");
 
+  // Remove old daemon
   const os = platform();
-  const nativeHostDir = os === "darwin"
-    ? join(homedir(), "Library", "Application Support", "Google", "Chrome", "NativeMessagingHosts")
-    : join(homedir(), ".config", "google-chrome", "NativeMessagingHosts");
+  if (os === "darwin") {
+    const plistPath = join(homedir(), "Library", "LaunchAgents", "com.opencode.browser-daemon.plist");
+    if (existsSync(plistPath)) {
+      try {
+        execSync(`launchctl unload "${plistPath}" 2>/dev/null || true`, { stdio: "ignore" });
+        unlinkSync(plistPath);
+        success("Removed daemon plist");
+      } catch {}
+    }
+  }
+
+  // Remove native host registration (v1.x)
+  const nativeHostDir =
+    os === "darwin"
+      ? join(homedir(), "Library", "Application Support", "Google", "Chrome", "NativeMessagingHosts")
+      : join(homedir(), ".config", "google-chrome", "NativeMessagingHosts");
 
   const manifestPath = join(nativeHostDir, "com.opencode.browser_automation.json");
-
   if (existsSync(manifestPath)) {
-    const { unlinkSync } = await import("fs");
     unlinkSync(manifestPath);
     success("Removed native host registration");
-  } else {
-    warn("Native host manifest not found");
+  }
+
+  // Remove lock file
+  const lockFile = join(homedir(), ".opencode-browser", "lock.json");
+  if (existsSync(lockFile)) {
+    unlinkSync(lockFile);
+    success("Removed lock file");
   }
 
   log(`
-${color("bright", "Note:")} The extension files at ~/.opencode-browser/ were not removed.
-Remove them manually if needed:
+${color("bright", "Note:")} Extension files at ~/.opencode-browser/ were not removed.
+Remove manually if needed:
   rm -rf ~/.opencode-browser/
 
-Also remove the "browser" entry from your opencode.json.
+Also remove "@different-ai/opencode-browser" from your opencode.json plugin array.
 `);
 }
 

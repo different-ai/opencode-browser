@@ -1,4 +1,4 @@
-const DAEMON_URL = "ws://localhost:19222";
+const PLUGIN_URL = "ws://localhost:19222";
 const KEEPALIVE_ALARM = "keepalive";
 
 let ws = null;
@@ -23,10 +23,10 @@ function connect() {
   }
   
   try {
-    ws = new WebSocket(DAEMON_URL);
+    ws = new WebSocket(PLUGIN_URL);
     
     ws.onopen = () => {
-      console.log("[OpenCode] Connected to daemon");
+      console.log("[OpenCode] Connected to plugin");
       isConnected = true;
       updateBadge(true);
     };
