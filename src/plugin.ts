@@ -34,6 +34,7 @@ let server: ReturnType<typeof Bun.serve> | null = null;
 let pendingRequests = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
 let requestId = 0;
 let hasLock = false;
+let serverFailed = false;
 
 // ============================================================================
 // Lock File Management
@@ -119,7 +120,7 @@ function sleep(ms: number): Promise<void> {
 async function killSession(targetPid: number): Promise<{ success: boolean; error?: string }> {
   try {
     process.kill(targetPid, "SIGTERM");
-    // Wait a bit for process to die
+    // Wait for process to die
     let attempts = 0;
     while (isProcessAlive(targetPid) && attempts < 10) {
       await sleep(100);
@@ -141,7 +142,25 @@ async function killSession(targetPid: number): Promise<{ success: boolean; error
 // WebSocket Server
 // ============================================================================
 
+function checkPortAvailable(): boolean {
+  try {
+    const testSocket = Bun.connect({ port: WS_PORT, timeout: 1000 });
+    testSocket.end();
+    return true;
+  } catch (e) {
+    if ((e as any).code === "ECONNREFUSED") {
+      return false;
+    }
+    return true;
+  }
+}
+
 function startServer(): boolean {
+  if (server) {
+    console.error(`[browser-plugin] Server already running`);
+    return true;
+  }
+
   try {
     server = Bun.serve({
       port: WS_PORT,
@@ -171,6 +190,7 @@ function startServer(): boolean {
       },
     });
     console.error(`[browser-plugin] WebSocket server listening on port ${WS_PORT}`);
+    serverFailed = false;
     return true;
   } catch (e) {
     console.error(`[browser-plugin] Failed to start server:`, e);
@@ -178,7 +198,7 @@ function startServer(): boolean {
   }
 }
 
-function handleMessage(message: { type: string; id?: number; result?: any; error?: any }) {
+function handleMessage(message: { type: string; id?: number; result?: any; error?: any }): void {
   if (message.type === "tool_response" && message.id !== undefined) {
     const pending = pendingRequests.get(message.id);
     if (pending) {
@@ -203,7 +223,7 @@ function sendToChrome(message: any): boolean {
 }
 
 async function executeCommand(tool: string, args: Record<string, any>): Promise<any> {
-  // Check lock first
+  // Check lock and start server if needed
   const lockResult = tryAcquireLock();
   if (!lockResult.success) {
     throw new Error(
@@ -211,7 +231,6 @@ async function executeCommand(tool: string, args: Record<string, any>): Promise<
     );
   }
 
-  // Start server if not running
   if (!server) {
     if (!startServer()) {
       throw new Error("Failed to start WebSocket server. Port may be in use.");
@@ -273,12 +292,33 @@ process.on("exit", () => {
 export const BrowserPlugin: Plugin = async (ctx) => {
   console.error(`[browser-plugin] Initializing (session ${sessionId})`);
 
-  // Try to acquire lock and start server on load
-  const lockResult = tryAcquireLock();
-  if (lockResult.success) {
-    startServer();
+  // Check port availability on load, don't try to acquire lock yet
+  checkPortAvailable();
+
+  // Check lock status and set appropriate state
+  const lock = readLock();
+  if (!lock) {
+    // No lock - just check if we can start server
+    console.error(`[browser-plugin] No lock file, checking port...`);
+    if (!startServer()) {
+      serverFailed = true;
+    }
+  } else if (lock.sessionId === sessionId) {
+    // We own the lock - start server
+    console.error(`[browser-plugin] Already have lock, starting server...`);
+    if (!startServer()) {
+      serverFailed = true;
+    }
+  } else if (!isProcessAlive(lock.pid)) {
+    // Stale lock - take it and start server
+    console.error(`[browser-plugin] Stale lock from dead PID ${lock.pid}, taking over...`);
+    writeLock();
+    if (!startServer()) {
+      serverFailed = true;
+    }
   } else {
-    console.error(`[browser-plugin] Lock held by PID ${lockResult.lock?.pid}, tools will fail until lock is released`);
+    // Another session has the lock
+    console.error(`[browser-plugin] Lock held by PID ${lock.pid}, tools will fail until lock is released`);
   }
 
   return {
@@ -316,7 +356,12 @@ export const BrowserPlugin: Plugin = async (ctx) => {
           if (!lock) {
             // No lock, just acquire
             writeLock();
-            if (!server) startServer();
+            // Start server if needed
+            if (!server) {
+              if (!startServer()) {
+                throw new Error("Failed to start WebSocket server after acquiring lock.");
+              }
+            }
             return "No active session. Browser now connected to this session.";
           }
 
@@ -327,14 +372,23 @@ export const BrowserPlugin: Plugin = async (ctx) => {
           if (!isProcessAlive(lock.pid)) {
             // Stale lock
             writeLock();
-            if (!server) startServer();
+            // Start server if needed
+            if (!server) {
+              if (!startServer()) {
+                throw new Error("Failed to start WebSocket server after cleaning stale lock.");
+              }
+            }
             return `Cleaned stale lock (PID ${lock.pid} was dead). Browser now connected to this session.`;
           }
 
-          // Kill the other session
+          // Kill other session and wait for port to be free
           const result = await killSession(lock.pid);
           if (result.success) {
-            if (!server) startServer();
+            if (!server) {
+              if (!startServer()) {
+                throw new Error("Failed to start WebSocket server after killing other session.");
+              }
+            }
             return `Killed session ${lock.sessionId} (PID ${lock.pid}). Browser now connected to this session.`;
           } else {
             throw new Error(`Failed to kill session: ${result.error}`);
@@ -343,7 +397,7 @@ export const BrowserPlugin: Plugin = async (ctx) => {
       }),
 
       browser_navigate: tool({
-        description: "Navigate to a URL in the browser",
+        description: "Navigate to a URL in browser",
         args: {
           url: tool.schema.string({ description: "The URL to navigate to" }),
           tabId: tool.schema.optional(tool.schema.number({ description: "Optional tab ID" })),
@@ -354,9 +408,9 @@ export const BrowserPlugin: Plugin = async (ctx) => {
       }),
 
       browser_click: tool({
-        description: "Click an element on the page using a CSS selector",
+        description: "Click an element on page using a CSS selector",
         args: {
-          selector: tool.schema.string({ description: "CSS selector for the element to click" }),
+          selector: tool.schema.string({ description: "CSS selector for element to click" }),
           tabId: tool.schema.optional(tool.schema.number({ description: "Optional tab ID" })),
         },
         async execute(args) {
@@ -367,7 +421,7 @@ export const BrowserPlugin: Plugin = async (ctx) => {
       browser_type: tool({
         description: "Type text into an input element",
         args: {
-          selector: tool.schema.string({ description: "CSS selector for the input element" }),
+          selector: tool.schema.string({ description: "CSS selector for input element" }),
           text: tool.schema.string({ description: "Text to type" }),
           clear: tool.schema.optional(tool.schema.boolean({ description: "Clear field before typing" })),
           tabId: tool.schema.optional(tool.schema.number({ description: "Optional tab ID" })),
@@ -378,26 +432,26 @@ export const BrowserPlugin: Plugin = async (ctx) => {
       }),
 
       browser_screenshot: tool({
-        description: "Take a screenshot of the current page. Saves to ~/.opencode-browser/screenshots/ and returns the file path.",
+        description: "Take a screenshot of the current page. Saves to ~/.opencode-browser/screenshots/",
         args: {
           tabId: tool.schema.optional(tool.schema.number({ description: "Optional tab ID" })),
-          name: tool.schema.optional(tool.schema.string({ description: "Optional name for the screenshot file (without extension)" })),
+          name: tool.schema.optional(
+            tool.schema.string({ description: "Optional name for screenshot file (without extension)" })
+          ),
         },
         async execute(args) {
           const result = await executeCommand("screenshot", args);
-          
+
           if (result && result.startsWith("data:image")) {
-            // Extract base64 data and save to file
             const base64Data = result.replace(/^data:image\/\w+;base64,/, "");
             const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
             const filename = args.name ? `${args.name}.png` : `screenshot-${timestamp}.png`;
             const filepath = join(SCREENSHOTS_DIR, filename);
-            
+
             writeFileSync(filepath, Buffer.from(base64Data, "base64"));
-            
             return `Screenshot saved: ${filepath}`;
           }
-          
+
           return result;
         },
       }),
