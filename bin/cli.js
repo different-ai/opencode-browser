@@ -144,40 +144,27 @@ async function install() {
 
   success(`Extension files copied to: ${extensionDir}`);
 
-  header("Step 3: Load Extension in Chrome");
+  header("Step 3: Load Extension in Browser");
 
   log(`
+Works with: ${color("cyan", "Chrome")}, ${color("cyan", "Brave")}, ${color("cyan", "Arc")}, ${color("cyan", "Edge")}, and other Chromium browsers.
+
 To load the extension:
 
-1. Open Chrome and go to: ${color("cyan", "chrome://extensions")}
+1. Open your browser and go to: ${color("cyan", "chrome://extensions")}
+   (or ${color("cyan", "brave://extensions")}, ${color("cyan", "arc://extensions")}, etc.)
+
 2. Enable ${color("bright", "Developer mode")} (toggle in top right)
+
 3. Click ${color("bright", "Load unpacked")}
-4. Select this folder: ${color("cyan", extensionDir)}
+
+4. Select this folder:
+   ${color("cyan", extensionDir)}
+   ${os === "darwin" ? color("yellow", "Tip: Press Cmd+Shift+G and paste the path above") : ""}
+
 5. Copy the ${color("bright", "Extension ID")} shown under the extension name
    (looks like: abcdefghijklmnopqrstuvwxyz123456)
 `);
-
-  const openChrome = await confirm("Open Chrome extensions page now?");
-  if (openChrome) {
-    try {
-      if (os === "darwin") {
-        execSync('open -a "Google Chrome" "chrome://extensions"', { stdio: "ignore" });
-      } else {
-        execSync('xdg-open "chrome://extensions"', { stdio: "ignore" });
-      }
-    } catch {}
-  }
-
-  const openFinder = await confirm("Open extension folder in file manager?");
-  if (openFinder) {
-    try {
-      if (os === "darwin") {
-        execSync(`open "${extensionDir}"`, { stdio: "ignore" });
-      } else {
-        execSync(`xdg-open "${extensionDir}"`, { stdio: "ignore" });
-      }
-    } catch {}
-  }
 
   log("");
   const extensionId = await ask(color("bright", "Enter your Extension ID: "));
