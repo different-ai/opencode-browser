@@ -217,7 +217,49 @@ exec "${nodePath}" "${hostScriptPath}" "$@"
   const logsDir = join(homedir(), ".opencode-browser", "logs");
   mkdirSync(logsDir, { recursive: true });
 
-  header("Step 5: Configure OpenCode");
+  header("Step 5: Install Background Daemon");
+
+  if (os === "darwin") {
+    const daemonPath = join(PACKAGE_ROOT, "src", "daemon.js");
+    
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.opencode.browser-daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${nodePath}</string>
+    <string>${daemonPath}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${logsDir}/daemon.log</string>
+  <key>StandardErrorPath</key>
+  <string>${logsDir}/daemon.log</string>
+</dict>
+</plist>`;
+
+    const plistPath = join(homedir(), "Library", "LaunchAgents", "com.opencode.browser-daemon.plist");
+    writeFileSync(plistPath, plist);
+    
+    try {
+      execSync(`launchctl unload "${plistPath}" 2>/dev/null || true`, { stdio: "ignore" });
+      execSync(`launchctl load "${plistPath}"`, { stdio: "ignore" });
+      success("Daemon installed and started");
+    } catch (e) {
+      warn("Could not start daemon automatically. Run: launchctl load " + plistPath);
+    }
+  } else {
+    warn("On Linux, create a systemd service for the daemon manually.");
+    log(`Daemon script: ${join(PACKAGE_ROOT, "src", "daemon.js")}`);
+  }
+
+  header("Step 6: Configure OpenCode");
 
   const serverPath = join(PACKAGE_ROOT, "src", "server.js");
   const mcpConfig = {
