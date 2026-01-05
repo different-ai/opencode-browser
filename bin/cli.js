@@ -253,8 +253,20 @@ ${color("bright", JSON.stringify(mcpConfig, null, 2))}
       }
     }
   } else {
-    log(`No opencode.json found in current directory.`);
-    log(`Add the config above to your project's opencode.json manually.`);
+    const shouldCreate = await confirm(`No opencode.json found. Create one with browser config?`);
+    
+    if (shouldCreate) {
+      try {
+        const config = { "$schema": "https://opencode.ai/config.json", mcp: mcpConfig };
+        writeFileSync(opencodeJsonPath, JSON.stringify(config, null, 2) + "\n");
+        success("Created opencode.json with browser MCP config");
+        shouldUpdateConfig = true;
+      } catch (e) {
+        error(`Failed to create opencode.json: ${e.message}`);
+      }
+    } else {
+      log(`Add the config above to your project's opencode.json manually.`);
+    }
   }
 
   header("Installation Complete!");
@@ -281,6 +293,9 @@ ${color("bright", "Available tools:")}
   browser_execute    - Run JavaScript
 
 ${color("bright", "Logs:")} ~/.opencode-browser/logs/
+
+${color("bright", "Test it out:")}
+  Open OpenCode and try: ${color("cyan", '"Navigate to google.com and take a snapshot"')}
 `);
 }
 
