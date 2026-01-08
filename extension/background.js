@@ -3,6 +3,7 @@ const KEEPALIVE_ALARM = "keepalive";
 
 let ws = null;
 let isConnected = false;
+let connectionAttempts = 0;
 
 chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.25 });
 
@@ -26,8 +27,9 @@ function connect() {
     ws = new WebSocket(PLUGIN_URL);
     
     ws.onopen = () => {
-      console.log("[OpenCode] Connected to plugin");
+      console.log("[OpenCode] Connected to MCP server");
       isConnected = true;
+      connectionAttempts = 0;
       updateBadge(true);
     };
     
@@ -41,14 +43,22 @@ function connect() {
     };
     
     ws.onclose = () => {
-      console.log("[OpenCode] Disconnected");
+      if (isConnected) {
+        console.log("[OpenCode] Disconnected from MCP server");
+      }
       isConnected = false;
       ws = null;
       updateBadge(false);
     };
     
-    ws.onerror = (err) => {
-      console.error("[OpenCode] WebSocket error");
+    ws.onerror = () => {
+      connectionAttempts++;
+      // Only log first attempt and then every 20th attempt (5 minutes)
+      if (connectionAttempts === 1) {
+        console.log("[OpenCode] Waiting for MCP server on port 19222...");
+      } else if (connectionAttempts % 20 === 0) {
+        console.log("[OpenCode] Still waiting for MCP server... (use browser tools in OpenCode to start it)");
+      }
       isConnected = false;
       updateBadge(false);
     };
