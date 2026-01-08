@@ -84,11 +84,55 @@ async function isPortFree(port: number): Promise<boolean> {
   }
 }
 
+async function killProcessOnPort(port: number): Promise<boolean> {
+  try {
+    // Use lsof to find PID using the port
+    const proc = Bun.spawn(["lsof", "-t", `-i:${port}`], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    const pids = output.trim().split("\n").filter(Boolean);
+    
+    if (pids.length === 0) {
+      return true; // No process found, port should be free
+    }
+
+    // Kill each PID found
+    for (const pid of pids) {
+      const pidNum = parseInt(pid, 10);
+      if (isNaN(pidNum)) continue;
+      
+      console.error(`[browser-mcp] Killing existing process ${pidNum} on port ${port}`);
+      try {
+        process.kill(pidNum, "SIGTERM");
+      } catch (e) {
+        // Process may have already exited
+      }
+    }
+
+    // Wait a bit for process to die
+    await sleep(500);
+    
+    // Verify port is now free
+    return await isPortFree(port);
+  } catch (e) {
+    console.error(`[browser-mcp] Failed to kill process on port:`, e);
+    return false;
+  }
+}
+
 async function startWebSocketServer(): Promise<boolean> {
   if (server) return true;
+  
   if (!(await isPortFree(WS_PORT))) {
-    console.error(`[browser-mcp] Port ${WS_PORT} is in use`);
-    return false;
+    console.error(`[browser-mcp] Port ${WS_PORT} is in use, attempting to take over...`);
+    const killed = await killProcessOnPort(WS_PORT);
+    if (!killed) {
+      console.error(`[browser-mcp] Failed to free port ${WS_PORT}`);
+      return false;
+    }
+    console.error(`[browser-mcp] Successfully freed port ${WS_PORT}`);
   }
 
   try {
