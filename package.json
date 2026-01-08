@@ -1,15 +1,14 @@
 {
   "name": "@different-ai/opencode-browser",
-  "version": "2.0.2",
-  "description": "Browser automation plugin for OpenCode. Control your real Chrome browser with existing logins and cookies.",
+  "version": "3.0.0",
+  "description": "Browser automation MCP server for OpenCode. Control your real Chrome browser with existing logins and cookies.",
   "type": "module",
   "bin": {
     "opencode-browser": "./bin/cli.js"
   },
-  "main": "./src/plugin.ts",
+  "main": "./src/mcp-server.ts",
   "exports": {
-    ".": "./src/plugin.ts",
-    "./plugin": "./src/plugin.ts"
+    ".": "./src/mcp-server.ts"
   },
   "files": [
     "bin",
@@ -18,14 +17,16 @@
     "README.md"
   ],
   "scripts": {
-    "install-extension": "node bin/cli.js install"
+    "install-extension": "node bin/cli.js install",
+    "serve": "bun run src/mcp-server.ts"
   },
   "keywords": [
     "opencode",
     "browser",
     "automation",
     "chrome",
-    "plugin"
+    "mcp",
+    "model-context-protocol"
   ],
   "author": "Benjamin Shafii",
   "license": "MIT",
@@ -37,11 +38,11 @@
     "url": "https://github.com/different-ai/opencode-browser/issues"
   },
   "homepage": "https://github.com/different-ai/opencode-browser#readme",
-  "peerDependencies": {
-    "@opencode-ai/plugin": "*"
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "zod": "^4.3.5"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "*",
     "bun-types": "*"
   }
 }

@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 /**
- * OpenCode Browser - CLI Installer
+ * OpenCode Browser - CLI
  *
- * Installs the Chrome extension for browser automation.
- * v2.0: Plugin-based architecture (no daemon, no MCP server)
+ * Commands:
+ *   install  - Install Chrome extension
+ *   serve    - Run MCP server (used by OpenCode)
+ *   status   - Check connection status
  */
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, readdirSync, unlinkSync } from "fs";
 import { homedir, platform } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import { createInterface } from "readline";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -71,33 +73,71 @@ async function confirm(question) {
 }
 
 async function main() {
-  console.log(`
-${color("cyan", color("bright", "OpenCode Browser v2.0"))}
-${color("cyan", "Browser automation for OpenCode")}
-`);
-
   const command = process.argv[2];
 
-  if (command === "install") {
+  if (command === "serve") {
+    // Run MCP server - this is called by OpenCode
+    await serve();
+  } else if (command === "install") {
+    await showHeader();
     await install();
+    rl.close();
   } else if (command === "uninstall") {
+    await showHeader();
     await uninstall();
+    rl.close();
   } else if (command === "status") {
+    await showHeader();
     await status();
+    rl.close();
   } else {
+    await showHeader();
     log(`
 ${color("bright", "Usage:")}
   npx @different-ai/opencode-browser install     Install extension
   npx @different-ai/opencode-browser uninstall   Remove installation
-  npx @different-ai/opencode-browser status      Check lock status
+  npx @different-ai/opencode-browser status      Check status
+  npx @different-ai/opencode-browser serve       Run MCP server (internal)
 
-${color("bright", "v2.0 Changes:")}
-  - Plugin-based architecture (no daemon needed)
-  - Add plugin to opencode.json, load extension in Chrome, done
+${color("bright", "Quick Start:")}
+  1. Run: npx @different-ai/opencode-browser install
+  2. Add to your opencode.json:
+     ${color("cyan", `"mcp": { "browser": { "type": "local", "command": ["bunx", "@different-ai/opencode-browser", "serve"] } }`)}
+  3. Restart OpenCode
 `);
+    rl.close();
   }
+}
 
-  rl.close();
+async function showHeader() {
+  console.log(`
+${color("cyan", color("bright", "OpenCode Browser v2.1"))}
+${color("cyan", "Browser automation MCP server for OpenCode")}
+`);
+}
+
+async function serve() {
+  // Launch the MCP server
+  const serverPath = join(PACKAGE_ROOT, "src", "mcp-server.ts");
+  
+  // Use bun to run the TypeScript server
+  const child = spawn("bun", ["run", serverPath], {
+    stdio: "inherit",
+    env: process.env,
+  });
+
+  child.on("error", (err) => {
+    console.error("[browser-mcp] Failed to start server:", err);
+    process.exit(1);
+  });
+
+  child.on("exit", (code) => {
+    process.exit(code || 0);
+  });
+
+  // Forward signals to child
+  process.on("SIGINT", () => child.kill("SIGINT"));
+  process.on("SIGTERM", () => child.kill("SIGTERM"));
 }
 
 async function install() {
@@ -157,45 +197,50 @@ To load the extension:
 
   header("Step 4: Configure OpenCode");
 
-  const pluginConfig = `{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@different-ai/opencode-browser"]
-}`;
+  const mcpConfig = {
+    browser: {
+      type: "local",
+      command: ["bunx", "@different-ai/opencode-browser", "serve"],
+    },
+  };
 
   log(`
-Add the plugin to your ${color("cyan", "opencode.json")}:
+Add the MCP server to your ${color("cyan", "opencode.json")}:
 
-${color("bright", pluginConfig)}
+${color("bright", JSON.stringify({ $schema: "https://opencode.ai/config.json", mcp: mcpConfig }, null, 2))}
 
-Or if you already have an opencode.json, just add to the "plugin" array:
-${color("bright", '"plugin": ["@different-ai/opencode-browser"]')}
+Or if you already have an opencode.json, add to the "mcp" object:
+${color("bright", JSON.stringify({ mcp: mcpConfig }, null, 2))}
 `);
 
   const opencodeJsonPath = join(process.cwd(), "opencode.json");
 
   if (existsSync(opencodeJsonPath)) {
-    const shouldUpdate = await confirm(`Found opencode.json. Add plugin automatically?`);
+    const shouldUpdate = await confirm(`Found opencode.json. Add MCP server automatically?`);
 
     if (shouldUpdate) {
       try {
         const config = JSON.parse(readFileSync(opencodeJsonPath, "utf-8"));
-        config.plugin = config.plugin || [];
-        if (!config.plugin.includes("@different-ai/opencode-browser")) {
-          config.plugin.push("@different-ai/opencode-browser");
-        }
-        // Remove old MCP config if present
-        if (config.mcp?.browser) {
-          delete config.mcp.browser;
-          if (Object.keys(config.mcp).length === 0) {
-            delete config.mcp;
+        config.mcp = config.mcp || {};
+        config.mcp.browser = mcpConfig.browser;
+        
+        // Remove old plugin config if present
+        if (config.plugin && Array.isArray(config.plugin)) {
+          const idx = config.plugin.indexOf("@different-ai/opencode-browser");
+          if (idx !== -1) {
+            config.plugin.splice(idx, 1);
+            warn("Removed old plugin entry (replaced by MCP)");
           }
-          warn("Removed old MCP browser config (replaced by plugin)");
+          if (config.plugin.length === 0) {
+            delete config.plugin;
+          }
         }
+        
         writeFileSync(opencodeJsonPath, JSON.stringify(config, null, 2) + "\n");
-        success("Updated opencode.json with plugin");
+        success("Updated opencode.json with MCP server");
       } catch (e) {
         error(`Failed to update opencode.json: ${e.message}`);
-        log("Please add the plugin manually.");
+        log("Please add the MCP config manually.");
       }
     }
   } else {
@@ -205,60 +250,69 @@ ${color("bright", '"plugin": ["@different-ai/opencode-browser"]')}
       try {
         const config = {
           $schema: "https://opencode.ai/config.json",
-          plugin: ["@different-ai/opencode-browser"],
+          mcp: mcpConfig,
         };
         writeFileSync(opencodeJsonPath, JSON.stringify(config, null, 2) + "\n");
-        success("Created opencode.json with plugin");
+        success("Created opencode.json with MCP server");
       } catch (e) {
         error(`Failed to create opencode.json: ${e.message}`);
       }
     }
   }
 
-  // Clean up old daemon if present
-  header("Step 5: Cleanup (v1.x migration)");
+  // Clean up old daemon/plugin if present
+  header("Step 5: Cleanup (migration)");
 
   const oldDaemonPlist = join(homedir(), "Library", "LaunchAgents", "com.opencode.browser-daemon.plist");
   if (existsSync(oldDaemonPlist)) {
     try {
       execSync(`launchctl unload "${oldDaemonPlist}" 2>/dev/null || true`, { stdio: "ignore" });
       unlinkSync(oldDaemonPlist);
-      success("Removed old daemon (no longer needed in v2.0)");
+      success("Removed old daemon (no longer needed)");
     } catch {
       warn("Could not remove old daemon plist. Remove manually if needed.");
     }
-  } else {
-    success("No old daemon to clean up");
   }
+
+  // Remove old lock file
+  const oldLockFile = join(homedir(), ".opencode-browser", "lock.json");
+  if (existsSync(oldLockFile)) {
+    try {
+      unlinkSync(oldLockFile);
+      success("Removed old lock file (not needed with MCP)");
+    } catch {}
+  }
+
+  success("Cleanup complete");
 
   header("Installation Complete!");
 
   log(`
 ${color("green", "")} Extension: ${extensionDir}
-${color("green", "")} Plugin: @different-ai/opencode-browser
+${color("green", "")} MCP Server: @different-ai/opencode-browser
 
 ${color("bright", "How it works:")}
-  1. OpenCode loads the plugin on startup
-  2. Plugin starts WebSocket server on port 19222
+  1. OpenCode spawns MCP server on demand
+  2. MCP server starts WebSocket server on port 19222
   3. Chrome extension connects automatically
-  4. Browser tools are available!
+  4. Browser tools are available to any OpenCode session!
 
 ${color("bright", "Available tools:")}
-  browser_status      - Check if browser is available
-  browser_kill_session - Take over from another session
+  browser_status      - Check if browser is connected
   browser_navigate    - Go to a URL
   browser_click       - Click an element
   browser_type        - Type into an input
   browser_screenshot  - Capture the page
-  browser_snapshot    - Get accessibility tree
+  browser_snapshot    - Get accessibility tree + all links
   browser_get_tabs    - List open tabs
   browser_scroll      - Scroll the page
   browser_wait        - Wait for duration
   browser_execute     - Run JavaScript
 
-${color("bright", "Multi-session:")}
-  Only one OpenCode session can use browser at a time.
-  Use browser_status to check, browser_kill_session to take over.
+${color("bright", "Benefits of MCP architecture:")}
+  - No session conflicts between OpenCode instances
+  - Server runs independently of OpenCode process
+  - Clean separation of concerns
 
 ${color("bright", "Test it:")}
   Restart OpenCode and try: ${color("cyan", '"Check browser status"')}
@@ -266,35 +320,27 @@ ${color("bright", "Test it:")}
 }
 
 async function status() {
-  header("Browser Lock Status");
+  header("Browser Status");
 
-  const lockFile = join(homedir(), ".opencode-browser", "lock.json");
-
-  if (!existsSync(lockFile)) {
-    success("Browser available (no lock file)");
-    return;
+  // Check if port 19222 is in use
+  try {
+    const result = execSync("lsof -i :19222 2>/dev/null || true", { encoding: "utf-8" });
+    if (result.trim()) {
+      success("WebSocket server is running on port 19222");
+      log(result);
+    } else {
+      warn("WebSocket server not running (starts on demand via MCP)");
+    }
+  } catch {
+    warn("Could not check port status");
   }
 
-  try {
-    const lock = JSON.parse(readFileSync(lockFile, "utf-8"));
-    log(`
-Lock file: ${lockFile}
-
-PID: ${lock.pid}
-Session: ${lock.sessionId}
-Started: ${lock.startedAt}
-Working directory: ${lock.cwd}
-`);
-
-    // Check if process is alive
-    try {
-      process.kill(lock.pid, 0);
-      warn(`Process ${lock.pid} is running. Browser is locked.`);
-    } catch {
-      success(`Process ${lock.pid} is dead. Lock is stale and will be auto-cleaned.`);
-    }
-  } catch (e) {
-    error(`Could not read lock file: ${e.message}`);
+  // Check extension directory
+  const extensionDir = join(homedir(), ".opencode-browser", "extension");
+  if (existsSync(extensionDir)) {
+    success(`Extension installed at: ${extensionDir}`);
+  } else {
+    warn("Extension not installed. Run: npx @different-ai/opencode-browser install");
   }
 }
 
@@ -338,7 +384,7 @@ ${color("bright", "Note:")} Extension files at ~/.opencode-browser/ were not rem
 Remove manually if needed:
   rm -rf ~/.opencode-browser/
 
-Also remove "@different-ai/opencode-browser" from your opencode.json plugin array.
+Also remove the "browser" entry from your opencode.json mcp section.
 `);
 }
 

@@ -1,6 +1,6 @@
 # OpenCode Browser
 
-Browser automation plugin for [OpenCode](https://github.com/opencode-ai/opencode).
+Browser automation MCP server for [OpenCode](https://github.com/opencode-ai/opencode).
 
 Control your real Chrome browser with existing logins, cookies, and bookmarks. No DevTools Protocol, no security prompts.
 
@@ -8,7 +8,7 @@ Control your real Chrome browser with existing logins, cookies, and bookmarks. N
 
 Chrome 136+ blocks `--remote-debugging-port` on your default profile for security reasons. DevTools-based automation (like Playwright) triggers a security prompt every time.
 
-OpenCode Browser uses a simple WebSocket connection between an OpenCode plugin and a Chrome extension. Your automation works with your existing browser session - no prompts, no separate profiles.
+OpenCode Browser uses a simple WebSocket connection between an MCP server and a Chrome extension. Your automation works with your existing browser session - no prompts, no separate profiles.
 
 ## Installation
 
@@ -19,7 +19,7 @@ npx @different-ai/opencode-browser install
 The installer will:
 1. Copy the extension to `~/.opencode-browser/extension/`
 2. Guide you to load the extension in Chrome
-3. Update your `opencode.json` to use the plugin
+3. Update your `opencode.json` with MCP server config
 
 ## Configuration
 
@@ -27,7 +27,12 @@ Add to your `opencode.json`:
 
 ```json
 {
-  "plugin": ["@different-ai/opencode-browser"]
+  "mcp": {
+    "browser": {
+      "type": "local",
+      "command": ["bunx", "@different-ai/opencode-browser", "serve"]
+    }
+  }
 }
 ```
 
@@ -40,59 +45,65 @@ Then load the extension in Chrome:
 
 | Tool | Description |
 |------|-------------|
-| `browser_status` | Check if browser is available or locked |
-| `browser_kill_session` | Take over from another OpenCode session |
+| `browser_status` | Check if browser extension is connected |
 | `browser_navigate` | Navigate to a URL |
 | `browser_click` | Click an element by CSS selector |
 | `browser_type` | Type text into an input field |
-| `browser_screenshot` | Capture the visible page |
-| `browser_snapshot` | Get accessibility tree with selectors |
+| `browser_screenshot` | Capture the page (returns base64, optionally saves to file) |
+| `browser_snapshot` | Get accessibility tree with selectors + all page links |
 | `browser_get_tabs` | List all open tabs |
 | `browser_scroll` | Scroll page or element into view |
 | `browser_wait` | Wait for a duration |
 | `browser_execute` | Run JavaScript in page context |
 
-## Multi-Session Support
+### Screenshot Tool
 
-Only one OpenCode session can use the browser at a time. This prevents conflicts when you have multiple terminals open.
+The `browser_screenshot` tool returns base64 image data by default, allowing AI to view images directly:
 
-- `browser_status` - Check who has the lock
-- `browser_kill_session` - Kill the other session and take over
+```javascript
+// Returns base64 image (AI can view it)
+browser_screenshot()
 
-In your prompts, you can say:
-- "If browser is locked, kill the session and proceed"
-- "If browser is locked, skip this task"
+// Save to current working directory
+browser_screenshot({ save: true })
+
+// Save to specific path
+browser_screenshot({ path: "my-screenshot.png" })
+```
 
 ## Architecture
 
 ```
-OpenCode Plugin ◄──WebSocket:19222──► Chrome Extension
-       │                                    │
-       └── Lock file                        └── chrome.tabs, chrome.scripting
+OpenCode <──STDIO──> MCP Server <──WebSocket:19222──> Chrome Extension
+                          │                                   │
+                          └── @modelcontextprotocol/sdk       └── chrome.tabs, chrome.scripting
 ```
 
 **Two components:**
-1. OpenCode plugin (runs WebSocket server, defines tools)
-2. Chrome extension (connects to plugin, executes commands)
+1. MCP Server (runs as separate process, manages WebSocket server)
+2. Chrome extension (connects to server, executes browser commands)
 
-**No daemon. No MCP server. No native messaging host.**
+**Benefits of MCP architecture:**
+- No session conflicts between OpenCode instances
+- Server runs independently of OpenCode process
+- Clean separation of concerns
+- Standard MCP protocol
 
-## Upgrading from v1.x
+## Upgrading from v2.x (Plugin)
 
-v2.0 is a complete rewrite with a simpler architecture:
+v3.0 migrates from plugin to MCP architecture:
 
-1. Run `npx @different-ai/opencode-browser install` (cleans up old daemon automatically)
-2. Replace MCP config with plugin config in `opencode.json`:
+1. Run `npx @different-ai/opencode-browser install`
+2. Replace plugin config with MCP config in `opencode.json`:
 
 ```diff
-- "mcp": {
--   "browser": {
--     "type": "local",
--     "command": ["npx", "@different-ai/opencode-browser", "start"],
--     "enabled": true
--   }
-- }
-+ "plugin": ["@different-ai/opencode-browser"]
+- "plugin": ["@different-ai/opencode-browser"]
++ "mcp": {
++   "browser": {
++     "type": "local",
++     "command": ["bunx", "@different-ai/opencode-browser", "serve"]
++   }
++ }
 ```
 
 3. Restart OpenCode
@@ -104,13 +115,13 @@ v2.0 is a complete rewrite with a simpler architecture:
 - Check that the extension is loaded and enabled
 - Click the extension icon to see connection status
 
-**"Browser locked by another session"**
-- Use `browser_kill_session` to take over
-- Or close the other OpenCode session
-
 **"Failed to start WebSocket server"**
 - Port 19222 may be in use
-- Check if another OpenCode session is running
+- Run `lsof -i :19222` to check what's using it
+
+**"browser_execute fails on some sites"**
+- Sites with strict CSP block JavaScript execution
+- Use `browser_snapshot` to get page data instead
 
 ## Uninstall
 
@@ -123,7 +134,7 @@ Then remove the extension from Chrome and delete `~/.opencode-browser/` if desir
 ## Platform Support
 
 - macOS ✓
-- Linux ✓
+- Linux ✓  
 - Windows (not yet supported)
 
 ## License

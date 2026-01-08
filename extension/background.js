@@ -215,7 +215,8 @@ async function toolSnapshot({ tabId }) {
         if (rect.width > 0 && rect.height > 0 && (isInteractive || el.innerText?.trim())) {
           const node = { uid: `e${uid}`, role: el.getAttribute("role") || el.tagName.toLowerCase(), 
                         name: getName(el).slice(0, 200), tag: el.tagName.toLowerCase() };
-          if (el.tagName === "A" && el.href) node.href = el.href;
+          // Capture href for any element that has one (links, area, base, etc.)
+          if (el.href) node.href = el.href;
           if (el.tagName === "INPUT") { node.type = el.type; node.value = el.value; }
           if (el.id) node.selector = `#${el.id}`;
           else if (el.className && typeof el.className === "string") {
@@ -234,7 +235,27 @@ async function toolSnapshot({ tabId }) {
         return { nodes, nextUid: uid };
       }
       
-      return { url: location.href, title: document.title, nodes: build(document.body).nodes.slice(0, 500) };
+      // Collect all links on the page separately for easy access
+      function getAllLinks() {
+        const links = [];
+        const seen = new Set();
+        document.querySelectorAll("a[href]").forEach(a => {
+          const href = a.href;
+          if (href && !seen.has(href) && !href.startsWith("javascript:")) {
+            seen.add(href);
+            const text = a.innerText?.trim().slice(0, 100) || a.getAttribute("aria-label") || "";
+            links.push({ href, text });
+          }
+        });
+        return links.slice(0, 100); // Limit to 100 links
+      }
+      
+      return { 
+        url: location.href, 
+        title: document.title, 
+        nodes: build(document.body).nodes.slice(0, 500),
+        links: getAllLinks()
+      };
     }
   });
   
