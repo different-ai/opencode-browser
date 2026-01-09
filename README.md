@@ -23,11 +23,11 @@ The installer will:
 1. Copy the extension to `~/.opencode-browser/extension/`
 2. Walk you through loading + pinning it in `chrome://extensions`
 3. Ask for the extension ID and install a **Native Messaging Host manifest**
-4. Update your `opencode.json` to load the plugin
+4. Update your `.opencode.json` to load the plugin
 
 ### Configure OpenCode
 
-Your `opencode.json` should contain:
+Your `.opencode.json` should contain:
 
 ```json
 {
@@ -59,6 +59,7 @@ Tools:
 
 ## Available tools
 
+- `browser_version`
 - `browser_status`
 - `browser_get_tabs`
 - `browser_navigate`
@@ -86,4 +87,4 @@ Tools:
 npx @different-ai/opencode-browser uninstall
 ```
 
-Then remove the unpacked extension in `chrome://extensions` and remove the plugin from `opencode.json`.
+Then remove the unpacked extension in `chrome://extensions` and remove the plugin from `.opencode.json`.

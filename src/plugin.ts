@@ -1,10 +1,32 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import net from "net";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { spawn } from "child_process";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PACKAGE_JSON_PATH = join(__dirname, "..", "package.json");
+
+let cachedVersion: string | null = null;
+
+function getPackageVersion(): string {
+  if (cachedVersion) return cachedVersion;
+  try {
+    const pkg = JSON.parse(readFileSync(PACKAGE_JSON_PATH, "utf8"));
+    if (typeof pkg?.version === "string") {
+      cachedVersion = pkg.version;
+      return cachedVersion;
+    }
+  } catch {
+    // ignore
+  }
+  cachedVersion = "unknown";
+  return cachedVersion;
+}
 
 const BASE_DIR = join(homedir(), ".opencode-browser");
 const SOCKET_PATH = join(BASE_DIR, "broker.sock");
@@ -142,6 +164,7 @@ function toolResultText(data: any, fallback: string): string {
 const plugin: Plugin = {
   name: "opencode-browser",
   tools: [
+
     tool(
       "browser_status",
       "Check broker/native-host connection status and current tab claims.",
@@ -151,6 +174,7 @@ const plugin: Plugin = {
         return JSON.stringify(data);
       }
     ),
+
     tool(
       "browser_get_tabs",
       "List all open browser tabs",

@@ -275,38 +275,65 @@ Find it at ${color("cyan", "chrome://extensions")}:
 
   header("Step 7: Configure OpenCode");
 
-  const opencodeJsonPath = join(process.cwd(), "opencode.json");
+  // OpenCode config discovery (per upstream docs):
+  // - $HOME/.opencode.json
+  // - $XDG_CONFIG_HOME/opencode/.opencode.json
+  // - ./.opencode.json (project-local)
+  // We write the project-local config to avoid touching global state.
+  const opencodeJsonPath = join(process.cwd(), ".opencode.json");
 
   const desiredPlugin = "@different-ai/opencode-browser";
 
+  function normalizePlugins(val) {
+    if (Array.isArray(val)) return val.filter((v) => typeof v === "string");
+    if (typeof val === "string" && val.trim()) return [val.trim()];
+    return [];
+  }
+
+  function removeLegacyMcp(config) {
+    if (config.mcp?.browser) {
+      delete config.mcp.browser;
+      if (Object.keys(config.mcp).length === 0) delete config.mcp;
+      warn("Removed old MCP browser config (replaced by plugin)");
+    }
+    if (config.mcpServers?.browser) {
+      delete config.mcpServers.browser;
+      if (Object.keys(config.mcpServers).length === 0) delete config.mcpServers;
+      warn("Removed old MCP browser config (replaced by plugin)");
+    }
+  }
+
   if (existsSync(opencodeJsonPath)) {
-    const shouldUpdate = await confirm("Found opencode.json. Add plugin automatically?");
+    const shouldUpdate = await confirm("Found .opencode.json. Add plugin automatically?");
     if (shouldUpdate) {
       try {
         const config = JSON.parse(readFileSync(opencodeJsonPath, "utf-8"));
-        config.plugin = config.plugin || [];
-        if (!Array.isArray(config.plugin)) config.plugin = [];
+
+        // Make sure plugin is an array.
+        config.plugin = normalizePlugins(config.plugin);
         if (!config.plugin.includes(desiredPlugin)) config.plugin.push(desiredPlugin);
 
-        // Remove MCP config if present
-        if (config.mcp?.browser) {
-          delete config.mcp.browser;
-          if (Object.keys(config.mcp).length === 0) delete config.mcp;
-          warn("Removed old MCP browser config (replaced by plugin)");
-        }
+        removeLegacyMcp(config);
+
+        // Ensure schema is correct if present.
+        if (typeof config.$schema !== "string") config.$schema = "https://opencode.ai/config.json";
 
         writeFileSync(opencodeJsonPath, JSON.stringify(config, null, 2) + "\n");
-        success("Updated opencode.json with plugin");
+        success("Updated .opencode.json with plugin");
       } catch (e) {
-        error(`Failed to update opencode.json: ${e.message}`);
+        error(`Failed to update .opencode.json: ${e.message}`);
       }
     }
   } else {
-    const shouldCreate = await confirm("No opencode.json found. Create one?");
+    const shouldCreate = await confirm("No .opencode.json found. Create one?");
     if (shouldCreate) {
-      const config = { $schema: "https://opencode.ai/config.json", plugin: [desiredPlugin] };
+      const config = {
+        $schema: "https://opencode.ai/config.json",
+        theme: "opencode",
+        plugin: [desiredPlugin],
+      };
       writeFileSync(opencodeJsonPath, JSON.stringify(config, null, 2) + "\n");
-      success("Created opencode.json with plugin");
+      success("Created .opencode.json with plugin");
     }
   }
 
