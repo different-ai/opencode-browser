@@ -1,7 +1,5 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-
-const { schema } = tool;
 import net from "net";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { homedir } from "os";
