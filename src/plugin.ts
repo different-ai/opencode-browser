@@ -1,5 +1,9 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
+
+const { schema } = tool;
+
+const { schema } = tool;
 import net from "net";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { homedir } from "os";
@@ -163,170 +167,188 @@ function toolResultText(data: any, fallback: string): string {
   return fallback;
 }
 
-const plugin: Plugin = {
-  name: "opencode-browser",
-  tools: [
+const plugin: Plugin = async (ctx) => {
+  console.log("[opencode-browser] Plugin loading...", { pid: process.pid });
 
-    tool(
-      "browser_debug",
-      "Debug plugin loading and connection status.",
-      {},
-      async () => {
-        console.log("[opencode-browser] browser_debug called", { sessionId, pid: process.pid });
-        return JSON.stringify({
-          loaded: true,
-          sessionId,
-          pid: process.pid,
-          pluginVersion: getPackageVersion(),
-          tools: plugin.tools.map(t => ({ name: t.name, description: t.description })),
-          timestamp: new Date().toISOString(),
-        });
-      }
-    ),
+  return {
+    tool: {
+      browser_debug: tool({
+        description: "Debug plugin loading and connection status.",
+        args: {},
+        async execute(args, ctx) {
+          console.log("[opencode-browser] browser_debug called", { sessionId, pid: process.pid });
+          return JSON.stringify({
+            loaded: true,
+            sessionId,
+            pid: process.pid,
+            pluginVersion: getPackageVersion(),
+            timestamp: new Date().toISOString(),
+          });
+        },
+      }),
 
-    tool(
-      "browser_version",
-      "Return the installed @different-ai/opencode-browser plugin version.",
-      {},
-      async () => {
-        return JSON.stringify({
-          name: "@different-ai/opencode-browser",
-          version: getPackageVersion(),
-          sessionId,
-          pid: process.pid,
-        });
-      }
-    ),
+      browser_version: tool({
+        description: "Return the installed @different-ai/opencode-browser plugin version.",
+        args: {},
+        async execute(args, ctx) {
+          return JSON.stringify({
+            name: "@different-ai/opencode-browser",
+            version: getPackageVersion(),
+            sessionId,
+            pid: process.pid,
+          });
+        },
+      }),
 
-    tool(
-      "browser_status",
-      "Check broker/native-host connection status and current tab claims.",
-      {},
-      async () => {
-        const data = await brokerRequest("status", {});
-        return JSON.stringify(data);
-      }
-    ),
+      browser_status: tool({
+        description: "Check broker/native-host connection status and current tab claims.",
+        args: {},
+        async execute(args, ctx) {
+          const data = await brokerRequest("status", {});
+          return JSON.stringify(data);
+        },
+      }),
 
-    tool(
-      "browser_get_tabs",
-      "List all open browser tabs",
-      {},
-      async () => {
-        const data = await brokerRequest("tool", { tool: "get_tabs", args: {} });
-        return toolResultText(data, "ok");
-      }
-    ),
-    tool(
-      "browser_navigate",
-      "Navigate to a URL in the browser",
-      { url: { type: "string" }, tabId: { type: "number", optional: true } },
-      async ({ url, tabId }: any) => {
-        const data = await brokerRequest("tool", { tool: "navigate", args: { url, tabId } });
-        return toolResultText(data, `Navigated to ${url}`);
-      }
-    ),
-    tool(
-      "browser_click",
-      "Click an element on the page using a CSS selector",
-      { selector: { type: "string" }, tabId: { type: "number", optional: true } },
-      async ({ selector, tabId }: any) => {
-        const data = await brokerRequest("tool", { tool: "click", args: { selector, tabId } });
-        return toolResultText(data, `Clicked ${selector}`);
-      }
-    ),
-    tool(
-      "browser_type",
-      "Type text into an input element",
-      {
-        selector: { type: "string" },
-        text: { type: "string" },
-        clear: { type: "boolean", optional: true },
-        tabId: { type: "number", optional: true },
-      },
-      async ({ selector, text, clear, tabId }: any) => {
-        const data = await brokerRequest("tool", { tool: "type", args: { selector, text, clear, tabId } });
-        return toolResultText(data, `Typed \"${text}\" into ${selector}`);
-      }
-    ),
-    tool(
-      "browser_screenshot",
-      "Take a screenshot of the current page. Returns base64 image data URL.",
-      { tabId: { type: "number", optional: true } },
-      async ({ tabId }: any) => {
-        const data = await brokerRequest("tool", { tool: "screenshot", args: { tabId } });
-        return toolResultText(data, "Screenshot failed");
-      }
-    ),
-    tool(
-      "browser_snapshot",
-      "Get an accessibility tree snapshot of the page.",
-      { tabId: { type: "number", optional: true } },
-      async ({ tabId }: any) => {
-        const data = await brokerRequest("tool", { tool: "snapshot", args: { tabId } });
-        return toolResultText(data, "Snapshot failed");
-      }
-    ),
-    tool(
-      "browser_scroll",
-      "Scroll the page or scroll an element into view",
-      {
-        selector: { type: "string", optional: true },
-        x: { type: "number", optional: true },
-        y: { type: "number", optional: true },
-        tabId: { type: "number", optional: true },
-      },
-      async ({ selector, x, y, tabId }: any) => {
-        const data = await brokerRequest("tool", { tool: "scroll", args: { selector, x, y, tabId } });
-        return toolResultText(data, "Scrolled");
-      }
-    ),
-    tool(
-      "browser_wait",
-      "Wait for a specified duration",
-      { ms: { type: "number", optional: true }, tabId: { type: "number", optional: true } },
-      async ({ ms, tabId }: any) => {
-        const data = await brokerRequest("tool", { tool: "wait", args: { ms, tabId } });
-        return toolResultText(data, "Waited");
-      }
-    ),
-    tool(
-      "browser_execute",
-      "Execute JavaScript code in the page context and return the result.",
-      { code: { type: "string" }, tabId: { type: "number", optional: true } },
-      async ({ code, tabId }: any) => {
-        const data = await brokerRequest("tool", { tool: "execute_script", args: { code, tabId } });
-        return toolResultText(data, "Execute failed");
-      }
-    ),
-    tool(
-      "browser_claim_tab",
-      "Claim a tab for this OpenCode session (per-tab ownership).",
-      { tabId: { type: "number" }, force: { type: "boolean", optional: true } },
-      async ({ tabId, force }: any) => {
-        const data = await brokerRequest("claim_tab", { tabId, force });
-        return JSON.stringify(data);
-      }
-    ),
-    tool(
-      "browser_release_tab",
-      "Release a previously claimed tab.",
-      { tabId: { type: "number" } },
-      async ({ tabId }: any) => {
-        const data = await brokerRequest("release_tab", { tabId });
-        return JSON.stringify(data);
-      }
-    ),
-    tool(
-      "browser_list_claims",
-      "List current tab ownership claims.",
-      {},
-      async () => {
-        const data = await brokerRequest("list_claims", {});
-        return JSON.stringify(data);
-      }
-    ),
-  ],
+      browser_get_tabs: tool({
+        description: "List all open browser tabs",
+        args: {},
+        async execute(args, ctx) {
+          const data = await brokerRequest("tool", { tool: "get_tabs", args: {} });
+          return toolResultText(data, "ok");
+        },
+      }),
+
+      browser_navigate: tool({
+        description: "Navigate to a URL in the browser",
+        args: {
+          url: schema.string(),
+          tabId: schema.number().optional(),
+        },
+        async execute({ url, tabId }, ctx) {
+          const data = await brokerRequest("tool", { tool: "navigate", args: { url, tabId } });
+          return toolResultText(data, `Navigated to ${url}`);
+        },
+      }),
+
+      browser_click: tool({
+        description: "Click an element on the page using a CSS selector",
+        args: {
+          selector: schema.string(),
+          tabId: schema.number().optional(),
+        },
+        async execute({ selector, tabId }, ctx) {
+          const data = await brokerRequest("tool", { tool: "click", args: { selector, tabId } });
+          return toolResultText(data, `Clicked ${selector}`);
+        },
+      }),
+
+      browser_type: tool({
+        description: "Type text into an input element",
+        args: {
+          selector: schema.string(),
+          text: schema.string(),
+          clear: schema.boolean().optional(),
+          tabId: schema.number().optional(),
+        },
+        async execute({ selector, text, clear, tabId }, ctx) {
+          const data = await brokerRequest("tool", { tool: "type", args: { selector, text, clear, tabId } });
+          return toolResultText(data, `Typed "${text}" into ${selector}`);
+        },
+      }),
+
+      browser_screenshot: tool({
+        description: "Take a screenshot of the current page. Returns base64 image data URL.",
+        args: {
+          tabId: schema.number().optional(),
+        },
+        async execute({ tabId }, ctx) {
+          const data = await brokerRequest("tool", { tool: "screenshot", args: { tabId } });
+          return toolResultText(data, "Screenshot failed");
+        },
+      }),
+
+      browser_snapshot: tool({
+        description: "Get an accessibility tree snapshot of the page.",
+        args: {
+          tabId: schema.number().optional(),
+        },
+        async execute({ tabId }, ctx) {
+          const data = await brokerRequest("tool", { tool: "snapshot", args: { tabId } });
+          return toolResultText(data, "Snapshot failed");
+        },
+      }),
+
+      browser_scroll: tool({
+        description: "Scroll the page or scroll an element into view",
+        args: {
+          selector: schema.string().optional(),
+          x: schema.number().optional(),
+          y: schema.number().optional(),
+          tabId: schema.number().optional(),
+        },
+        async execute({ selector, x, y, tabId }, ctx) {
+          const data = await brokerRequest("tool", { tool: "scroll", args: { selector, x, y, tabId } });
+          return toolResultText(data, "Scrolled");
+        },
+      }),
+
+      browser_wait: tool({
+        description: "Wait for a specified duration",
+        args: {
+          ms: schema.number().optional(),
+          tabId: schema.number().optional(),
+        },
+        async execute({ ms, tabId }, ctx) {
+          const data = await brokerRequest("tool", { tool: "wait", args: { ms, tabId } });
+          return toolResultText(data, "Waited");
+        },
+      }),
+
+      browser_execute: tool({
+        description: "Execute JavaScript code in the page context and return the result.",
+        args: {
+          code: schema.string(),
+          tabId: schema.number().optional(),
+        },
+        async execute({ code, tabId }, ctx) {
+          const data = await brokerRequest("tool", { tool: "execute_script", args: { code, tabId } });
+          return toolResultText(data, "Execute failed");
+        },
+      }),
+
+      browser_claim_tab: tool({
+        description: "Claim a tab for this OpenCode session (per-tab ownership).",
+        args: {
+          tabId: schema.number(),
+          force: schema.boolean().optional(),
+        },
+        async execute({ tabId, force }, ctx) {
+          const data = await brokerRequest("claim_tab", { tabId, force });
+          return JSON.stringify(data);
+        },
+      }),
+
+      browser_release_tab: tool({
+        description: "Release a previously claimed tab.",
+        args: {
+          tabId: schema.number(),
+        },
+        async execute({ tabId }, ctx) {
+          const data = await brokerRequest("release_tab", { tabId });
+          return JSON.stringify(data);
+        },
+      }),
+
+      browser_list_claims: tool({
+        description: "List current tab ownership claims.",
+        args: {},
+        async execute(args, ctx) {
+          const data = await brokerRequest("list_claims", {});
+          return JSON.stringify(data);
+        },
+      }),
+    },
+  };
 };
 
 export default plugin;
