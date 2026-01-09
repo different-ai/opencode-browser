@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpenCode Browser Automation",
-  "version": "2.0.0",
+  "version": "4.0.0",
   "description": "Browser automation for OpenCode",
   "permissions": [
     "tabs",
@@ -9,7 +9,8 @@
     "scripting",
     "storage",
     "notifications",
-    "alarms"
+    "alarms",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "<all_urls>"

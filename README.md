@@ -1,14 +1,16 @@
 # OpenCode Browser
 
-Browser automation MCP server for [OpenCode](https://github.com/opencode-ai/opencode).
+Browser automation plugin for [OpenCode](https://github.com/opencode-ai/opencode).
 
-Control your real Chrome browser with existing logins, cookies, and bookmarks. No DevTools Protocol, no security prompts.
+Control your real Chromium browser (Chrome/Brave/Arc/Edge) using your existing profile (logins, cookies, bookmarks). No DevTools Protocol, no security prompts.
 
-## Why?
+## Why this architecture
 
-Chrome 136+ blocks `--remote-debugging-port` on your default profile for security reasons. DevTools-based automation (like Playwright) triggers a security prompt every time.
+This version is optimized for reliability and predictable multi-session behavior:
 
-OpenCode Browser uses a simple WebSocket connection between an MCP server and a Chrome extension. Your automation works with your existing browser session - no prompts, no separate profiles.
+- **No WebSocket port** → no port conflicts
+- **Chrome Native Messaging** between extension and a local host process
+- A local **broker** multiplexes multiple OpenCode plugin sessions and enforces **per-tab ownership**
 
 ## Installation
 
@@ -17,111 +19,66 @@ npx @different-ai/opencode-browser install
 ```
 
 The installer will:
+
 1. Copy the extension to `~/.opencode-browser/extension/`
-2. Guide you to load the extension in Chrome
-3. Update your `opencode.json` with MCP server config
+2. Walk you through loading + pinning it in `chrome://extensions`
+3. Ask for the extension ID and install a **Native Messaging Host manifest**
+4. Update your `opencode.json` to load the plugin
 
-## Configuration
+### Configure OpenCode
 
-Add to your `opencode.json`:
+Your `opencode.json` should contain:
 
 ```json
 {
-  "mcp": {
-    "browser": {
-      "type": "local",
-      "command": ["bunx", "@different-ai/opencode-browser", "serve"]
-    }
-  }
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["@different-ai/opencode-browser"]
 }
 ```
 
-Then load the extension in Chrome:
-1. Go to `chrome://extensions`
-2. Enable "Developer mode"
-3. Click "Load unpacked" and select `~/.opencode-browser/extension/`
-
-## Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `browser_status` | Check if browser extension is connected |
-| `browser_navigate` | Navigate to a URL |
-| `browser_click` | Click an element by CSS selector |
-| `browser_type` | Type text into an input field |
-| `browser_screenshot` | Capture the page (returns base64, optionally saves to file) |
-| `browser_snapshot` | Get accessibility tree with selectors + all page links |
-| `browser_get_tabs` | List all open tabs |
-| `browser_scroll` | Scroll page or element into view |
-| `browser_wait` | Wait for a duration |
-| `browser_execute` | Run JavaScript in page context |
-
-### Screenshot Tool
-
-The `browser_screenshot` tool returns base64 image data by default, allowing AI to view images directly:
-
-```javascript
-// Returns base64 image (AI can view it)
-browser_screenshot()
-
-// Save to current working directory
-browser_screenshot({ save: true })
-
-// Save to specific path
-browser_screenshot({ path: "my-screenshot.png" })
-```
-
-## Architecture
+## How it works
 
 ```
-OpenCode <──STDIO──> MCP Server <──WebSocket:19222──> Chrome Extension
-                          │                                   │
-                          └── @modelcontextprotocol/sdk       └── chrome.tabs, chrome.scripting
+OpenCode Plugin <-> Local Broker (unix socket) <-> Native Host <-> Chrome Extension
 ```
 
-**Two components:**
-1. MCP Server (runs as separate process, manages WebSocket server)
-2. Chrome extension (connects to server, executes browser commands)
+- The extension connects to the native host.
+- The plugin talks to the broker over a local unix socket.
+- The broker forwards tool requests to the extension and enforces tab ownership.
 
-**Benefits of MCP architecture:**
-- No session conflicts between OpenCode instances
-- Server runs independently of OpenCode process
-- Clean separation of concerns
-- Standard MCP protocol
+## Per-tab ownership
 
-## Upgrading from v2.x (Plugin)
+- First time a session touches a tab, the broker **auto-claims** it for that session.
+- Other sessions attempting to use the same tab will get an error.
 
-v3.0 migrates from plugin to MCP architecture:
+Tools:
 
-1. Run `npx @different-ai/opencode-browser install`
-2. Replace plugin config with MCP config in `opencode.json`:
+- `browser_claim_tab({ tabId })`
+- `browser_release_tab({ tabId })`
+- `browser_list_claims()`
 
-```diff
-- "plugin": ["@different-ai/opencode-browser"]
-+ "mcp": {
-+   "browser": {
-+     "type": "local",
-+     "command": ["bunx", "@different-ai/opencode-browser", "serve"]
-+   }
-+ }
-```
+## Available tools
 
-3. Restart OpenCode
+- `browser_status`
+- `browser_get_tabs`
+- `browser_navigate`
+- `browser_click`
+- `browser_type`
+- `browser_screenshot`
+- `browser_snapshot`
+- `browser_scroll`
+- `browser_wait`
+- `browser_execute`
 
 ## Troubleshooting
 
-**"Chrome extension not connected"**
-- Make sure Chrome is running
-- Check that the extension is loaded and enabled
-- Click the extension icon to see connection status
+**Extension says native host not available**
+- Re-run `npx @different-ai/opencode-browser install`
+- Confirm the extension ID you pasted matches the loaded extension in `chrome://extensions`
 
-**"Failed to start WebSocket server"**
-- Port 19222 may be in use
-- Run `lsof -i :19222` to check what's using it
-
-**"browser_execute fails on some sites"**
-- Sites with strict CSP block JavaScript execution
-- Use `browser_snapshot` to get page data instead
+**Tab ownership errors**
+- Use `browser_list_claims()` to see who owns a tab
+- Use `browser_claim_tab({ tabId, force: true })` to take over intentionally
 
 ## Uninstall
 
@@ -129,18 +86,4 @@ v3.0 migrates from plugin to MCP architecture:
 npx @different-ai/opencode-browser uninstall
 ```
 
-Then remove the extension from Chrome and delete `~/.opencode-browser/` if desired.
-
-## Platform Support
-
-- macOS ✓
-- Linux ✓  
-- Windows (not yet supported)
-
-## License
-
-MIT
-
-## Credits
-
-Inspired by [Claude in Chrome](https://www.anthropic.com/news/claude-in-chrome) by Anthropic.
+Then remove the unpacked extension in `chrome://extensions` and remove the plugin from `opencode.json`.

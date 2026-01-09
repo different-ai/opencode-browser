@@ -1,9 +1,4 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "browser": {
-      "type": "local",
-      "command": ["bun", "run", "src/mcp-server.ts"]
-    }
-  }
+  "plugin": ["@different-ai/opencode-browser"]
 }
