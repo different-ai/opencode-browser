@@ -7,6 +7,8 @@ import { dirname, join } from "path";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 
+console.log("[opencode-browser] Plugin loading...", { pid: process.pid });
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PACKAGE_JSON_PATH = join(__dirname, "..", "package.json");
@@ -164,6 +166,36 @@ function toolResultText(data: any, fallback: string): string {
 const plugin: Plugin = {
   name: "opencode-browser",
   tools: [
+
+    tool(
+      "browser_debug",
+      "Debug plugin loading and connection status.",
+      {},
+      async () => {
+        console.log("[opencode-browser] browser_debug called", { sessionId, pid: process.pid });
+        return JSON.stringify({
+          loaded: true,
+          sessionId,
+          pid: process.pid,
+          tools: plugin.tools.map(t => t.name),
+          timestamp: new Date().toISOString(),
+        });
+      }
+    ),
+
+    tool(
+      "browser_version",
+      "Return the installed @different-ai/opencode-browser plugin version.",
+      {},
+      async () => {
+        return JSON.stringify({
+          name: "@different-ai/opencode-browser",
+          version: getPackageVersion(),
+          sessionId,
+          pid: process.pid,
+        });
+      }
+    ),
 
     tool(
       "browser_status",
