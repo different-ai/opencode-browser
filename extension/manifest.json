@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpenCode Browser Automation",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Browser automation for OpenCode",
   "permissions": [
     "tabs",

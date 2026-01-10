@@ -69,7 +69,10 @@ Tools:
 - `browser_snapshot`
 - `browser_scroll`
 - `browser_wait`
-- `browser_execute`
+- `browser_execute` (deprecated, CSP-limited)
+- `browser_query`
+- `browser_wait_for`
+- `browser_extract`
 
 ## Troubleshooting
 

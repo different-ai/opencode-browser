@@ -232,10 +232,11 @@ const plugin: Plugin = async (ctx) => {
         description: "Click an element on the page using a CSS selector",
         args: {
           selector: schema.string(),
+          index: schema.number().optional(),
           tabId: schema.number().optional(),
         },
-        async execute({ selector, tabId }, ctx) {
-          const data = await brokerRequest("tool", { tool: "click", args: { selector, tabId } });
+        async execute({ selector, index, tabId }, ctx) {
+          const data = await brokerRequest("tool", { tool: "click", args: { selector, index, tabId } });
           return toolResultText(data, `Clicked ${selector}`);
         },
       }),
@@ -246,10 +247,11 @@ const plugin: Plugin = async (ctx) => {
           selector: schema.string(),
           text: schema.string(),
           clear: schema.boolean().optional(),
+          index: schema.number().optional(),
           tabId: schema.number().optional(),
         },
-        async execute({ selector, text, clear, tabId }, ctx) {
-          const data = await brokerRequest("tool", { tool: "type", args: { selector, text, clear, tabId } });
+        async execute({ selector, text, clear, index, tabId }, ctx) {
+          const data = await brokerRequest("tool", { tool: "type", args: { selector, text, clear, index, tabId } });
           return toolResultText(data, `Typed "${text}" into ${selector}`);
         },
       }),
@@ -303,7 +305,8 @@ const plugin: Plugin = async (ctx) => {
       }),
 
       browser_execute: tool({
-        description: "Execute JavaScript code in the page context and return the result.",
+        description:
+          "(Deprecated) Execute arbitrary JavaScript in-page. Blocked on many sites by MV3 CSP/unsafe-eval. This tool now accepts JSON commands; prefer browser_query/browser_extract/browser_wait_for.",
         args: {
           code: schema.string(),
           tabId: schema.number().optional(),
@@ -311,6 +314,62 @@ const plugin: Plugin = async (ctx) => {
         async execute({ code, tabId }, ctx) {
           const data = await brokerRequest("tool", { tool: "execute_script", args: { code, tabId } });
           return toolResultText(data, "Execute failed");
+        },
+      }),
+
+      browser_query: tool({
+        description: "Read data from the page using selectors (supports shadow DOM + same-origin iframes).",
+        args: {
+          selector: schema.string(),
+          mode: schema.string().optional(),
+          attribute: schema.string().optional(),
+          property: schema.string().optional(),
+          index: schema.number().optional(),
+          limit: schema.number().optional(),
+          tabId: schema.number().optional(),
+        },
+        async execute({ selector, mode, attribute, property, index, limit, tabId }, ctx) {
+          const data = await brokerRequest("tool", {
+            tool: "query",
+            args: { selector, mode, attribute, property, index, limit, tabId },
+          });
+          return toolResultText(data, "Query failed");
+        },
+      }),
+
+      browser_wait_for: tool({
+        description: "Wait until a selector appears (supports shadow DOM + same-origin iframes).",
+        args: {
+          selector: schema.string(),
+          timeoutMs: schema.number().optional(),
+          pollMs: schema.number().optional(),
+          tabId: schema.number().optional(),
+        },
+        async execute({ selector, timeoutMs, pollMs, tabId }, ctx) {
+          const data = await brokerRequest("tool", {
+            tool: "wait_for",
+            args: { selector, timeoutMs, pollMs, tabId },
+          });
+          return toolResultText(data, "Wait-for failed");
+        },
+      }),
+
+      browser_extract: tool({
+        description:
+          "Extract readable text from the page (optionally regex match). Useful when content isn't in the accessibility tree.",
+        args: {
+          mode: schema.string().optional(),
+          pattern: schema.string().optional(),
+          flags: schema.string().optional(),
+          limit: schema.number().optional(),
+          tabId: schema.number().optional(),
+        },
+        async execute({ mode, pattern, flags, limit, tabId }, ctx) {
+          const data = await brokerRequest("tool", {
+            tool: "extract",
+            args: { mode, pattern, flags, limit, tabId },
+          });
+          return toolResultText(data, "Extract failed");
         },
       }),
 
