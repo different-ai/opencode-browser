@@ -7,7 +7,7 @@ Control your real Chromium browser (Chrome/Brave/Arc/Edge) using your existing p
 ## Why this architecture
 
 This version is optimized for reliability and predictable multi-session behavior:
-
+- **No MCP** -> just opencode plugin
 - **No WebSocket port** → no port conflicts
 - **Chrome Native Messaging** between extension and a local host process
 - A local **broker** multiplexes multiple OpenCode plugin sessions and enforces **per-tab ownership**
@@ -15,7 +15,7 @@ This version is optimized for reliability and predictable multi-session behavior
 ## Installation
 
 ```bash
-npx @different-ai/opencode-browser install
+bunx @different-ai/opencode-browser@latest install
 ```
 
 The installer will:
