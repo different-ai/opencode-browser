@@ -4,6 +4,10 @@ Browser automation plugin for [OpenCode](https://github.com/opencode-ai/opencode
 
 Control your real Chromium browser (Chrome/Brave/Arc/Edge) using your existing profile (logins, cookies, bookmarks). No DevTools Protocol, no security prompts.
 
+
+https://github.com/user-attachments/assets/1496b3b3-419b-436c-b412-8cda2fed83d6
+
+
 ## Why this architecture
 
 This version is optimized for reliability and predictable multi-session behavior:
@@ -14,9 +18,17 @@ This version is optimized for reliability and predictable multi-session behavior
 
 ## Installation
 
+> Help me improve this! 
+
 ```bash
 bunx @different-ai/opencode-browser@latest install
 ```
+
+
+https://github.com/user-attachments/assets/d5767362-fbf3-4023-858b-90f06d9f0b25
+
+
+
 
 The installer will:
 
