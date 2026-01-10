@@ -1,6 +1,6 @@
 {
   "name": "@different-ai/opencode-browser",
-  "version": "4.2.2",
+  "version": "4.2.3",
   "description": "Browser automation plugin for OpenCode (native messaging + per-tab ownership).",
   "type": "module",
   "bin": {
@@ -12,6 +12,7 @@
     "./plugin": "./dist/plugin.js"
   },
   "files": [
+    ".opencode",
     "bin",
     "dist",
     "extension",

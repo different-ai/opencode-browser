@@ -275,13 +275,6 @@ Find it at ${color("cyan", "chrome://extensions")}:
 
   header("Step 7: Configure OpenCode");
 
-  // OpenCode config discovery (per upstream docs):
-  // - $HOME/.opencode.json
-  // - $XDG_CONFIG_HOME/opencode/.opencode.json
-  // - ./.opencode.json (project-local)
-  // We write the project-local config to avoid touching global state.
-  const opencodeJsonPath = join(process.cwd(), ".opencode.json");
-
   const desiredPlugin = "@different-ai/opencode-browser";
 
   function normalizePlugins(val) {
@@ -290,51 +283,103 @@ Find it at ${color("cyan", "chrome://extensions")}:
     return [];
   }
 
-  function removeLegacyMcp(config) {
-    if (config.mcp?.browser) {
-      delete config.mcp.browser;
-      if (Object.keys(config.mcp).length === 0) delete config.mcp;
-      warn("Removed old MCP browser config (replaced by plugin)");
+  function stripJsoncComments(contents) {
+    return contents
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+  }
+
+  function findOpenCodeConfigPath(configDir) {
+    const jsoncPath = join(configDir, "opencode.jsonc");
+    if (existsSync(jsoncPath)) return jsoncPath;
+    const jsonPath = join(configDir, "opencode.json");
+    return jsonPath;
+  }
+
+  const configOptions = [
+    "1) Project (./opencode.json or opencode.jsonc)",
+    "2) Global (~/.config/opencode/opencode.json)",
+    "3) Custom path",
+    "4) Skip (does nothing)",
+  ];
+
+  log(`\n${configOptions.join("\n")}`);
+  const selection = await ask("Choose config location [1-4]: ");
+
+  let configPath = null;
+  let configDir = null;
+
+  if (selection === "1") {
+    configDir = process.cwd();
+    configPath = findOpenCodeConfigPath(configDir);
+  } else if (selection === "2") {
+    const xdgConfig = process.env.XDG_CONFIG_HOME;
+    configDir = xdgConfig ? join(xdgConfig, "opencode") : join(homedir(), ".config", "opencode");
+    configPath = findOpenCodeConfigPath(configDir);
+  } else if (selection === "3") {
+    const customPath = await ask("Enter full path to opencode.json or opencode.jsonc: ");
+    if (customPath) {
+      configPath = customPath;
+      configDir = dirname(customPath);
+    } else {
+      warn("No path provided. Skipping OpenCode config.");
     }
-    if (config.mcpServers?.browser) {
-      delete config.mcpServers.browser;
-      if (Object.keys(config.mcpServers).length === 0) delete config.mcpServers;
-      warn("Removed old MCP browser config (replaced by plugin)");
+  } else if (selection === "4") {
+    warn("Skipping OpenCode config (does nothing).");
+  } else {
+    warn("Invalid selection. Skipping OpenCode config.");
+  }
+
+  if (configPath && configDir) {
+    const hasExistingConfig = existsSync(configPath);
+    const shouldUpdate = hasExistingConfig
+      ? await confirm(`Found ${configPath}. Add plugin automatically?`)
+      : await confirm(`No config found at ${configPath}. Create one?`);
+
+    if (shouldUpdate) {
+      try {
+        const config = hasExistingConfig
+          ? JSON.parse(stripJsoncComments(readFileSync(configPath, "utf-8")))
+          : { $schema: "https://opencode.ai/config.json", plugin: [] };
+
+        config.plugin = normalizePlugins(config.plugin);
+        if (!config.plugin.includes(desiredPlugin)) config.plugin.push(desiredPlugin);
+        if (typeof config.$schema !== "string") config.$schema = "https://opencode.ai/config.json";
+
+        ensureDir(configDir);
+        writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+        success(`Updated ${configPath} with plugin`);
+      } catch (e) {
+        error(`Failed to update ${configPath}: ${e.message}`);
+      }
     }
   }
 
-  if (existsSync(opencodeJsonPath)) {
-    const shouldUpdate = await confirm("Found .opencode.json. Add plugin automatically?");
-    if (shouldUpdate) {
-      try {
-        const config = JSON.parse(readFileSync(opencodeJsonPath, "utf-8"));
+  header("Step 8: Optional Agent Skill");
 
-        // Make sure plugin is an array.
-        config.plugin = normalizePlugins(config.plugin);
-        if (!config.plugin.includes(desiredPlugin)) config.plugin.push(desiredPlugin);
+  log(`
+Agent Skills are reusable instructions discovered by OpenCode.
 
-        removeLegacyMcp(config);
+Format rules (summary):
+- Place a skill at .opencode/skill/<name>/SKILL.md
+- SKILL.md must start with YAML frontmatter with name + description
+- name must match the directory and use: ^[a-z0-9]+(-[a-z0-9]+)*$
+`);
 
-        // Ensure schema is correct if present.
-        if (typeof config.$schema !== "string") config.$schema = "https://opencode.ai/config.json";
+  const skillName = "browser-automation";
+  const skillSrc = join(PACKAGE_ROOT, ".opencode", "skill", skillName, "SKILL.md");
+  const skillDstDir = join(process.cwd(), ".opencode", "skill", skillName);
+  const skillDst = join(skillDstDir, "SKILL.md");
 
-        writeFileSync(opencodeJsonPath, JSON.stringify(config, null, 2) + "\n");
-        success("Updated .opencode.json with plugin");
-      } catch (e) {
-        error(`Failed to update .opencode.json: ${e.message}`);
-      }
+  if (existsSync(skillSrc)) {
+    const shouldAddSkill = await confirm(`Add ${skillName} skill to this repo?`);
+    if (shouldAddSkill) {
+      ensureDir(skillDstDir);
+      copyFileSync(skillSrc, skillDst);
+      success(`Added skill: ${skillDst}`);
     }
   } else {
-    const shouldCreate = await confirm("No .opencode.json found. Create one?");
-    if (shouldCreate) {
-      const config = {
-        $schema: "https://opencode.ai/config.json",
-        theme: "opencode",
-        plugin: [desiredPlugin],
-      };
-      writeFileSync(opencodeJsonPath, JSON.stringify(config, null, 2) + "\n");
-      success("Created .opencode.json with plugin");
-    }
+    warn("Skill template missing from package; skipping.");
   }
 
   header("Installation Complete!");
@@ -410,7 +455,7 @@ async function uninstall() {
 ${color("bright", "Note:")}
 - The unpacked extension folder remains at: ${EXTENSION_DIR}
 - Remove it manually in ${color("cyan", "chrome://extensions")}
-- Remove ${color("bright", "@different-ai/opencode-browser")} from your opencode.json plugin list if desired.
+- Remove ${color("bright", "@different-ai/opencode-browser")} from your opencode.json/opencode.jsonc plugin list if desired.
 `);
 }
 
