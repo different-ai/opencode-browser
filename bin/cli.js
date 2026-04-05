@@ -232,14 +232,19 @@ function ensureDir(p) {
 
 function resolveNodePath() {
   if (process.env.OPENCODE_BROWSER_NODE) return process.env.OPENCODE_BROWSER_NODE;
-  if (process.execPath && /node(\.exe)?$/.test(process.execPath)) return process.execPath;
+  // Prefer `which node` / `where node` — returns stable symlink paths (e.g.
+  // /opt/homebrew/bin/node) rather than versioned paths (e.g.
+  // /opt/homebrew/Cellar/node/25.8.1/bin/node) that break on package manager
+  // upgrades (Homebrew, nvm, fnm, volta, etc.).
   try {
     const command = isWindows() ? "where node" : "which node";
     const output = execSync(command, { stdio: ["ignore", "pipe", "ignore"] })
       .toString("utf8")
       .trim();
     if (output) return output;
-  } catch {}
+  } catch {
+      if (process.execPath && /node(\.exe)?$/.test(process.execPath)) return process.execPath;
+  }
   return process.execPath;
 }
 
