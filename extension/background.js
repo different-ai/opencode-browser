@@ -1151,35 +1151,57 @@ async function toolSelect({ selector, value, label, optionIndex, tabId, index = 
 async function toolScreenshot({ tabId }) {
   const tab = await getTabById(tabId)
 
-  // Activate and focus the target tab so the compositor renders it
-  await chrome.tabs.update(tab.id, { active: true, highlighted: true })
-  await chrome.windows.update(tab.windowId, { focused: true })
-  // Let the compositor finish the tab swap and give SPA frameworks a moment
-  // to flush any pending DOM paint after navigation
-  await new Promise(r => setTimeout(r, 600))
+  // Save current focus state so we can restore it after capturing
+  const previouslyFocusedWindow = await chrome.windows.getLastFocused()
+  const [previouslyActiveTab] = await chrome.tabs.query({ active: true, windowId: tab.windowId })
 
-  // Use debugger API for exact tab-specific capture.
-  // captureVisibleTab(windowId) captures whichever tab is visually active,
-  // not the requested tabId — producing wrong-tab screenshots when multiple
-  // tabs are open.
+  // Compositor delay: tabs.update + windows.update are async but the
+  // compositor needs a moment to actually paint the new foreground tab.
+  // 600ms was chosen empirically — enough for tab swap + SPA route paint.
+  const SCREENSHOT_RENDER_DELAY_MS = 600
+
   try {
-    const targets = await chrome.debugger.getTargets()
-    const alreadyAttached = targets.some(t => t.tabId === tab.id && t.attached)
-    if (!alreadyAttached) {
-      await chrome.debugger.attach({ tabId: tab.id }, "1.3")
+    // Activate and focus the target tab so the compositor renders it
+    await chrome.tabs.update(tab.id, { active: true, highlighted: true })
+    await chrome.windows.update(tab.windowId, { focused: true })
+    await new Promise(r => setTimeout(r, SCREENSHOT_RENDER_DELAY_MS))
+
+    // Use debugger API for exact tab-specific capture.
+    // captureVisibleTab(windowId) captures whichever tab is visually active,
+    // not the requested tabId — producing wrong-tab screenshots when multiple
+    // tabs are open.
+    let didAttach = false
+    try {
+      const targets = await chrome.debugger.getTargets()
+      const alreadyAttached = targets.some(t => t.tabId === tab.id && t.attached)
+      if (!alreadyAttached) {
+        await chrome.debugger.attach({ tabId: tab.id }, "1.3")
+        didAttach = true
+      }
+      const result = await chrome.debugger.sendCommand(
+        { tabId: tab.id },
+        "Page.captureScreenshot",
+        { format: "png" }
+      )
+      return { tabId: tab.id, content: `data:image/png;base64,${result.data}` }
+    } finally {
+      if (didAttach) {
+        try { await chrome.debugger.detach({ tabId: tab.id }) } catch (e) {
+          console.warn("Failed to detach debugger after screenshot capture", e)
+        }
+      }
     }
-    const result = await chrome.debugger.sendCommand(
-      { tabId: tab.id },
-      "Page.captureScreenshot",
-      { format: "png" }
-    )
-    if (!alreadyAttached) {
-      try { await chrome.debugger.detach({ tabId: tab.id }) } catch {}
-    }
-    return { tabId: tab.id, content: `data:image/png;base64,${result.data}` }
-  } catch {
-    // Fallback to standard API if debugger is unavailable
+  } catch (error) {
+    console.warn("Debugger screenshot capture failed; falling back to captureVisibleTab", error)
     return { tabId: tab.id, content: await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" }) }
+  } finally {
+    // Restore the previously active tab and focused window
+    if (previouslyActiveTab?.id !== undefined && previouslyActiveTab.id !== tab.id) {
+      try { await chrome.tabs.update(previouslyActiveTab.id, { active: true }) } catch {}
+    }
+    if (previouslyFocusedWindow?.id !== undefined && previouslyFocusedWindow.id !== tab.windowId) {
+      try { await chrome.windows.update(previouslyFocusedWindow.id, { focused: true }) } catch {}
+    }
   }
 }
 
