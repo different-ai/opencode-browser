@@ -1150,8 +1150,37 @@ async function toolSelect({ selector, value, label, optionIndex, tabId, index = 
 
 async function toolScreenshot({ tabId }) {
   const tab = await getTabById(tabId)
-  const png = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" })
-  return { tabId: tab.id, content: png }
+
+  // Activate and focus the target tab so the compositor renders it
+  await chrome.tabs.update(tab.id, { active: true, highlighted: true })
+  await chrome.windows.update(tab.windowId, { focused: true })
+  // Let the compositor finish the tab swap and give SPA frameworks a moment
+  // to flush any pending DOM paint after navigation
+  await new Promise(r => setTimeout(r, 600))
+
+  // Use debugger API for exact tab-specific capture.
+  // captureVisibleTab(windowId) captures whichever tab is visually active,
+  // not the requested tabId — producing wrong-tab screenshots when multiple
+  // tabs are open.
+  try {
+    const targets = await chrome.debugger.getTargets()
+    const alreadyAttached = targets.some(t => t.tabId === tab.id && t.attached)
+    if (!alreadyAttached) {
+      await chrome.debugger.attach({ tabId: tab.id }, "1.3")
+    }
+    const result = await chrome.debugger.sendCommand(
+      { tabId: tab.id },
+      "Page.captureScreenshot",
+      { format: "png" }
+    )
+    if (!alreadyAttached) {
+      try { await chrome.debugger.detach({ tabId: tab.id }) } catch {}
+    }
+    return { tabId: tab.id, content: `data:image/png;base64,${result.data}` }
+  } catch {
+    // Fallback to standard API if debugger is unavailable
+    return { tabId: tab.id, content: await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" }) }
+  }
 }
 
 async function toolSnapshot({ tabId }) {
