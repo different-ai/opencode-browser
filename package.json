@@ -1,6 +1,6 @@
 {
   "name": "@different-ai/opencode-browser",
-  "version": "4.6.2",
+  "version": "5.0.0",
   "description": "Browser automation plugin for OpenCode using direct Chrome DevTools Protocol connections.",
   "type": "module",
   "bin": {
