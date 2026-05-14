@@ -1,7 +1,7 @@
 {
   "name": "@different-ai/opencode-browser",
-  "version": "4.6.1",
-  "description": "Browser automation plugin for OpenCode (native messaging + per-tab ownership).",
+  "version": "4.6.2",
+  "description": "Browser automation plugin for OpenCode using direct Chrome DevTools Protocol connections.",
   "type": "module",
   "bin": {
     "opencode-browser": "bin/cli.js"
@@ -15,17 +15,12 @@
     ".opencode",
     "bin",
     "dist",
-    "extension",
     "README.md"
   ],
   "scripts": {
     "build": "bun build src/plugin.ts --target=node --outfile=dist/plugin.js",
-    "build:cws": "node build-cws-package.mjs",
-    "check:extension": "node --check extension/background.js",
     "prepublishOnly": "bun run build",
     "publish": "node -e \"if (process.env.npm_command === 'publish') process.exit(0); require('child_process').execSync('npm publish --access public', { stdio: 'inherit' });\"",
-    "install": "node bin/cli.js install",
-    "uninstall": "node bin/cli.js uninstall",
     "status": "node bin/cli.js status",
     "tools": "node bin/cli.js tools",
     "self-test": "node bin/cli.js self-test",
@@ -35,9 +30,10 @@
     "opencode",
     "browser",
     "automation",
+    "cdp",
     "chrome",
     "plugin",
-    "native-messaging"
+    "devtools"
   ],
   "author": "Benjamin Shafii",
   "license": "MIT",
@@ -53,7 +49,7 @@
     "@opencode-ai/plugin": "*"
   },
   "dependencies": {
-    "agent-browser": "^0.4.0"
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "*",

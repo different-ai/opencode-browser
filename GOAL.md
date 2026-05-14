@@ -1,25 +1,22 @@
 # Goal
 
-Make browser automation predictable without relying on unsafe JavaScript eval, so visible on‑screen content (like verification tokens) is accessible via generic, reusable primitives.
+Make OpenCode Browser behave like the OpenWork browser tool example: direct CDP control with explicit browser endpoints and target IDs.
 
-## What I changed
+## What Changed
 
-- Added resilient DOM access primitives to the extension: deep query across shadow DOM + same‑origin iframes, indexed click/type, and a unified `browser_query` that supports waiting and `page_text` extraction.
-- Expanded `browser_snapshot` to include visible text and richer node metadata so on‑screen strings are observable without eval.
-- Removed `browser_execute` from the public tool surface to avoid CSP/unsafe‑eval failures.
-- Updated the plugin surface and README tool list to expose the minimal primitives.
+- Replaced the extension/native-host/broker backend with a direct CDP plugin implementation.
+- Added minimal CDP and accessibility snapshot helpers under `src/lib/`.
+- Exposed the example-compatible tools: `browser_list`, `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_eval`, and `browser_screenshot`.
+- Removed bundled agent-browser, Chrome Web Store, extension, native host, and broker artifacts.
+- Updated README, CLI, lockfiles, and skill guidance for explicit `browser_url` usage.
 
 ## Why
 
-- Native messaging and the broker make transport predictable, but they do not bypass CSP.
-- Relying on `eval` breaks on strict pages (e.g., Google Admin Console), so we need stable, declarative primitives that mimic user‑visible access.
+- The direct CDP model is easier to reason about and avoids hidden singleton browser state.
+- Explicit `browser_url` values make local, Electron, and remote browser targets predictable.
+- Snapshot UIDs provide a simple action workflow without maintaining selector-specific browser APIs.
 
-## Remaining tasks (if any)
+## Remaining Tasks
 
-- Validate the new primitives on the real Admin Console flow to confirm the verification token is visible via `browser_query` with `mode=page_text`.
-- Consider adding higher‑level “copy button” helpers only if real‑world flows still fail.
-
-## Notes
-
-- All changes are generic (no Google‑specific logic).
-- Only declarative primitives are exposed; no arbitrary JS execution.
+- Run a live browser smoke test once a CDP endpoint is available.
+- Consider adding more CDP primitives only when concrete workflows need them.

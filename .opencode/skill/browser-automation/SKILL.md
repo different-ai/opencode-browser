@@ -1,6 +1,6 @@
 ---
 name: browser-automation
-description: Reliable, composable browser automation using minimal OpenCode Browser primitives.
+description: Reliable browser automation through explicit Chrome DevTools Protocol endpoints.
 license: MIT
 compatibility: opencode
 metadata:
@@ -10,54 +10,41 @@ metadata:
 
 ## What I do
 
-- Provide a safe, composable workflow for browsing tasks
-- Use `browser_query` list and index selection to click reliably
-- Confirm state changes after each action
-- Support CLI-first debugging with `opencode-browser tool` commands
+- Provide a safe, composable workflow for CDP-backed browsing tasks
+- Use explicit `browser_url` values; do not assume a hidden browser singleton
+- Use `browser_snapshot` UIDs for click and fill actions
+- Confirm state changes after each action with `browser_snapshot` or `browser_eval`
 
 ## Best-practice workflow
 
-1. Inspect tabs with `browser_get_tabs`
-2. Open new tabs with `browser_open_tab` when needed
+1. Inspect targets with `browser_list({ browser_url })`
+2. Pick a `target_id`, or omit it to use the first page target
 3. Navigate with `browser_navigate` if needed
-4. Wait for UI using `browser_query` with `timeoutMs`
-5. Discover candidates using `browser_query` with `mode=list`
-6. Click, type, or select using `index`
-7. Confirm using `browser_query` or `browser_snapshot`
+4. Discover candidates using `browser_snapshot`
+5. Click or fill using a UID from the latest snapshot
+6. Confirm using `browser_snapshot` or `browser_eval`
 
 ## CLI-first debugging
 
 - List all available tools: `npx @different-ai/opencode-browser tools`
-- Run one tool directly: `npx @different-ai/opencode-browser tool browser_status`
-- Pass JSON args: `npx @different-ai/opencode-browser tool browser_query --args '{"mode":"page_text"}'`
-- Run smoke test: `npx @different-ai/opencode-browser self-test`
-- After `update`, reload the unpacked extension in `chrome://extensions`
+- Run one tool directly: `npx @different-ai/opencode-browser tool browser_list --args '{"browser_url":"http://127.0.0.1:9222"}'`
+- Set a default endpoint: `OPENCODE_BROWSER_URL=http://127.0.0.1:9222 npx @different-ai/opencode-browser status`
 
-This path is useful for reproducing selector/scroll issues quickly before running a full OpenCode session.
+This path is useful for reproducing CDP endpoint or snapshot issues quickly before running a full OpenCode session.
 
-## Selecting options
+## Available tools
 
-- Use `browser_select` for native `<select>` elements
-- Prefer `value` or `label`; use `optionIndex` when needed
-- Example: `browser_select({ selector: "select", value: "plugin" })`
-
-## Query modes
-
-- `text`: read visible text from a matched element
-- `value`: read input values
-- `list`: list many matches with text/metadata
-- `exists`: check presence and count
-- `page_text`: extract visible page text
-
-## Opening tabs
-
-- Use `browser_open_tab` to create a new tab, optionally with `url` and `active`
-- Example: `browser_open_tab({ url: "https://example.com", active: false })`
+- `browser_list`
+- `browser_navigate`
+- `browser_snapshot`
+- `browser_click`
+- `browser_fill`
+- `browser_eval`
+- `browser_screenshot`
 
 ## Troubleshooting
 
-- If a selector fails, run `browser_query` with `mode=page_text` to confirm the content exists
-- Use `mode=list` on broad selectors (`button`, `a`, `*[role="button"]`, `*[role="listitem"]`) and choose by index
-- For inbox/chat panes, try text selectors first (`text:Subject line`) then verify selection with `browser_query`
-- For scrollable containers, pass both `selector` and `x`/`y` to `browser_scroll` and then verify `scrollTop`
+- If `browser_list` fails, verify the browser was started with `--remote-debugging-port`
+- If `browser_click` or `browser_fill` cannot find a UID, refresh the snapshot first
+- Use `browser_eval` for page-specific checks that are not visible in the accessibility tree
 - Confirm results after each action

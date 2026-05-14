@@ -1,51 +1,19 @@
 # OpenCode Browser
 
-Browser automation plugin for [OpenCode](https://opencode.ai).
+Browser automation plugin for [OpenCode](https://opencode.ai) using direct Chrome DevTools Protocol (CDP) connections.
 
-Control your real Chromium browser (Chrome/Brave/Arc/Edge) using your existing profile (logins, cookies, bookmarks). No DevTools Protocol, no security prompts.
-
-
-https://github.com/user-attachments/assets/1496b3b3-419b-436c-b412-8cda2fed83d6
-
+This package now mirrors the browser tool example from OpenWork: no Chrome extension, no native messaging host, no local broker, and no hidden singleton browser state. Each tool call explicitly receives a `browser_url`, and tools can target a specific tab/window with `target_id`.
 
 ## Why this architecture
 
-This version is optimized for reliability and predictable multi-session behavior:
-- **No MCP** -> just opencode plugin
-- **No WebSocket port** → no port conflicts
-- **Chrome Native Messaging** between extension and a local host process
-- A local **broker** multiplexes multiple OpenCode plugin sessions and enforces **per-tab ownership**
+- Direct CDP keeps the package small and predictable.
+- `browser_url` makes the browser endpoint explicit and portable.
+- `target_id` supports multiple tabs/windows without per-session ownership state.
+- The same tools work with Chrome, Chromium, Electron, and remote/proxied CDP endpoints.
 
-## Installation
+## Configure OpenCode
 
-> Help me improve this! 
-
-```bash
-bunx @different-ai/opencode-browser@latest install
-```
-
-Supports macOS, Linux, and Windows (Chrome/Edge/Brave/Chromium).
-
-
-https://github.com/user-attachments/assets/d5767362-fbf3-4023-858b-90f06d9f0b25
-
-
-
-
-The installer will:
-
-1. Copy the extension to `~/.opencode-browser/extension/`
-2. Walk you through loading + pinning it in `chrome://extensions`
-3. Resolve a fixed extension ID (no copy/paste) and install a **Native Messaging Host manifest**
-4. Update your `opencode.json` or `opencode.jsonc` to load the plugin
-
-To override the extension ID, pass `--extension-id <id>` or set `OPENCODE_BROWSER_EXTENSION_ID`.
-
-### Configure OpenCode
-
-> Note: if you run the installer you'll be prompted to include this automatically. If you said "yes", you can skip this part.
-
-Your `opencode.json` or `opencode.jsonc` should contain:
+Install or link the package, then add it to `opencode.json` or `opencode.jsonc`:
 
 ```json
 {
@@ -54,174 +22,51 @@ Your `opencode.json` or `opencode.jsonc` should contain:
 }
 ```
 
-### Update
+## Start A Browser
+
+Start Chrome or Chromium with remote debugging enabled:
 
 ```bash
-bunx @different-ai/opencode-browser@latest update
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
 ```
 
-## CLI tool runner (for local debugging)
+Then use `http://127.0.0.1:9222` as `browser_url`.
 
-Run plugin tools directly from the package CLI (without starting an OpenCode session):
+For Electron apps, pass the app's exposed CDP endpoint as `browser_url`.
+
+## CLI Debugging
+
+The CLI can list tools and run a tool directly after `bun run build`:
 
 ```bash
-# list available browser_* tools
 npx @different-ai/opencode-browser tools
-
-# run a single tool
-npx @different-ai/opencode-browser tool browser_status
-npx @different-ai/opencode-browser tool browser_query --args '{"mode":"page_text"}'
-
-# run built-in end-to-end smoke test (click + text selector + container scroll)
-npx @different-ai/opencode-browser self-test
+npx @different-ai/opencode-browser tool browser_list --args '{"browser_url":"http://127.0.0.1:9222"}'
+npx @different-ai/opencode-browser tool browser_snapshot --args '{"browser_url":"http://127.0.0.1:9222"}'
 ```
 
-This is useful for debugging issue reports (for example inbox/chat UIs) before involving a full OpenCode workflow.
-After `update`, reload the unpacked extension in `chrome://extensions` before running `self-test`.
+If you omit `browser_url` in CLI calls, `OPENCODE_BROWSER_URL` is used, then `http://127.0.0.1:9222`.
 
-## Chrome Web Store maintainer flow
+## Available Tools
 
-Build a store-ready extension package:
+- `browser_list`: list page targets on a CDP endpoint.
+- `browser_navigate`: navigate a target to a URL.
+- `browser_snapshot`: get an accessibility tree snapshot with `[uid]` markers.
+- `browser_click`: click an element by snapshot UID.
+- `browser_fill`: fill an input by snapshot UID.
+- `browser_eval`: evaluate JavaScript in the page.
+- `browser_screenshot`: capture a PNG screenshot and return its saved path.
 
-```bash
-bun run build:cws
-```
+## Typical Flow
 
-Outputs:
-
-- `artifacts/chrome-web-store/opencode-browser-cws-v<version>.zip`
-- `artifacts/chrome-web-store/manifest.chrome-web-store.json`
-
-Submission checklist and guidance:
-
-- `CHROME_WEB_STORE.md`
-- `CHROME_WEB_STORE_REQUEST_TEMPLATE.md`
-- `PRIVACY.md`
-
-## How it works
-
-```
-OpenCode Plugin <-> Local Broker (unix socket) <-> Native Host <-> Chrome Extension
-```
-
-- The extension connects to the native host.
-- The plugin talks to the broker over a local unix socket.
-- The broker forwards tool requests to the extension and enforces tab ownership.
-
-## Agent Browser mode (alpha)
-
-This branch adds an alternate backend powered by `agent-browser` (Playwright). It runs headless and does **not** reuse your existing Chrome profile.
-
-### Enable locally
-
-1. Install `agent-browser` and Chromium:
-
-```bash
-npm install -g agent-browser
-agent-browser install
-```
-
-2. Set the backend mode:
-
-```bash
-export OPENCODE_BROWSER_BACKEND=agent
-```
-
-Optional overrides:
-- `OPENCODE_BROWSER_AGENT_SESSION` (custom session name)
-- `OPENCODE_BROWSER_AGENT_SOCKET` (unix socket path)
-- `OPENCODE_BROWSER_AGENT_AUTOSTART=0` (disable auto-start)
-- `OPENCODE_BROWSER_AGENT_DAEMON` (explicit daemon path)
-
-### Tailnet/remote host
-
-On the host (e.g., `home-server.taild435d7.ts.net`), run the TCP gateway:
-
-```bash
-OPENCODE_BROWSER_AGENT_GATEWAY_PORT=9833 node bin/agent-gateway.cjs
-```
-
-On the client:
-
-```bash
-export OPENCODE_BROWSER_BACKEND=agent
-export OPENCODE_BROWSER_AGENT_HOST=home-server.taild435d7.ts.net
-export OPENCODE_BROWSER_AGENT_PORT=9833
-```
-
-## Per-tab ownership
-
-- Each session owns its own tabs; tabs are never shared between sessions.
-- If a session has no tab yet, the broker auto-creates a background tab on first tool use.
-- `browser_open_tab` always creates and claims a new tab for the session.
-- Claims expire after inactivity (`OPENCODE_BROWSER_CLAIM_TTL_MS`, default 5 minutes).
-- Use `browser_status` or `browser_list_claims` for debugging.
-
-## Available tools
-
-Core primitives:
-- `browser_status`
-- `browser_get_tabs`
-- `browser_list_claims`
-- `browser_claim_tab`
-- `browser_release_tab`
-- `browser_open_tab`
-- `browser_close_tab`
-- `browser_navigate`
-- `browser_query` (modes: `text`, `value`, `list`, `exists`, `page_text`; optional `timeoutMs`/`pollMs`)
-- `browser_click` (optional `timeoutMs`/`pollMs`)
-- `browser_type` (optional `timeoutMs`/`pollMs`)
-- `browser_select` (optional `timeoutMs`/`pollMs`)
-- `browser_scroll` (optional `timeoutMs`/`pollMs`)
-- `browser_wait`
-
-Downloads:
-- `browser_download`
-- `browser_list_downloads`
-
-Uploads:
-- `browser_set_file_input` (extension backend supports small files; use agent backend for larger uploads)
-
-Selector helpers (usable in `selector`):
-- `label:Mailing Address: City`
-- `aria:Principal Address: City`
-- `placeholder:Search`, `name:email`, `role:button`, `text:Submit`
-- `css:label:has(input)` to force CSS
-
-Selector-based tools wait up to 2000ms by default; set `timeoutMs: 0` to disable.
-
-Diagnostics:
-- `browser_snapshot`
-- `browser_screenshot`
-- `browser_version`
-
-## Roadmap
-
-- [ ] Add tab management tools (`browser_set_active_tab`)
-- [ ] Add navigation helpers (`browser_back`, `browser_forward`, `browser_reload`)
-- [ ] Add keyboard input tool (`browser_key`)
-- [x] Add download support (`browser_download`, `browser_list_downloads`)
-- [x] Add upload support (`browser_set_file_input`)
+1. Run `browser_list` with a `browser_url`.
+2. Choose a `target_id`, or omit it to use the first page target.
+3. Run `browser_navigate` if needed.
+4. Run `browser_snapshot` to get UIDs.
+5. Use `browser_click` or `browser_fill` with a UID from the latest snapshot.
+6. Confirm results with `browser_snapshot` or `browser_eval`.
 
 ## Troubleshooting
 
-**Extension says native host not available**
-- Re-run `npx @different-ai/opencode-browser install`
-- If you loaded a custom extension ID, rerun with `--extension-id <id>`
-
-**Tab ownership errors**
-- Errors usually mean you passed a `tabId` owned by another session
-- Use `browser_open_tab` to create a tab for your session (or omit `tabId` to use your default)
-- Use `browser_status` or `browser_list_claims` for debugging
-
-## Uninstall
-
-```bash
-npx @different-ai/opencode-browser uninstall
-```
-
-Then remove the unpacked extension in `chrome://extensions` and remove the plugin from `opencode.json` or `opencode.jsonc`.
-
-## Privacy
-
-- Privacy policy: `PRIVACY.md`
+- If `browser_list` fails, confirm the browser was started with `--remote-debugging-port` and that `/json/list` is reachable.
+- If `browser_click` or `browser_fill` says no snapshot is cached, call `browser_snapshot` first with the same `browser_url` and `target_id`.
+- If a proxied CDP endpoint returns localhost WebSocket URLs, the plugin rewrites them to the proxy host.

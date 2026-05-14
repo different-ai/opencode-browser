@@ -1,12 +1,14 @@
 import plugin from "../dist/plugin.js";
 
-const toolName = process.argv[2] ?? "browser_status";
+const toolName = process.argv[2] ?? "browser_list";
 const rawArgs = process.argv[3];
 
-let args: Record<string, unknown> = {};
+let args: Record<string, unknown> = {
+  browser_url: process.env.OPENCODE_BROWSER_URL || "http://127.0.0.1:9222",
+};
 if (rawArgs) {
   try {
-    args = JSON.parse(rawArgs);
+    args = { ...args, ...JSON.parse(rawArgs) };
   } catch (error) {
     console.error("Args must be valid JSON.");
     console.error(String(error));

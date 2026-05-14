@@ -1,668 +1,253 @@
+/**
+ * Browser control tools: direct CDP, no extension, no MCP, multi-target.
+ *
+ * Every tool takes a `browser_url` like `http://127.0.0.1:9222` and
+ * optionally a `target_id`. Start Chrome/Electron with remote debugging
+ * enabled, then use `browser_list` to discover available page targets.
+ */
+
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import net from "net";
-import { createAgentBackend, type AgentBackend } from "./agent-backend.js";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "fs";
-import { homedir, userInfo } from "os";
-import { basename, dirname, isAbsolute, join, resolve } from "path";
-import { spawn } from "child_process";
-import { fileURLToPath } from "url";
+import { writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { connectFirstPage, connectTarget, listTargets } from "./lib/cdp.js";
+import { resolveUid, takeSnapshot, type Snapshot } from "./lib/snapshot.js";
 
+const snapshotCache = new Map<string, Snapshot>();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const PACKAGE_JSON_PATH = join(__dirname, "..", "package.json");
+function cacheKey(browserUrl: string, targetId?: string): string {
+  return `${browserUrl}::${targetId ?? "default"}`;
+}
 
-let cachedVersion: string | null = null;
-
-function getPackageVersion(): string {
-  if (cachedVersion) return cachedVersion;
-  try {
-    const pkg = JSON.parse(readFileSync(PACKAGE_JSON_PATH, "utf8"));
-    if (typeof pkg?.version === "string") {
-      cachedVersion = pkg.version;
-      return cachedVersion;
-    }
-  } catch {
-    // ignore
+async function getClient(browserUrl: string, targetId?: string) {
+  if (targetId) {
+    const targets = await listTargets(browserUrl);
+    const target = targets.find((t) => t.id === targetId);
+    if (!target) throw new Error(`Target ${targetId} not found`);
+    return { client: await connectTarget(target.webSocketDebuggerUrl), target };
   }
-  cachedVersion = "unknown";
-  return cachedVersion;
+  return connectFirstPage(browserUrl);
 }
 
-const { schema } = tool;
-
-const BASE_DIR = join(homedir(), ".opencode-browser");
-const SOCKET_PATH = getBrokerSocketPath();
-const LOG_PATH = join(BASE_DIR, "plugin.log");
-
-function getSafePipeName(): string {
-  try {
-    const username = userInfo().username || "user";
-    return `opencode-browser-${username}`.replace(/[^a-zA-Z0-9._-]/g, "_");
-  } catch {
-    return "opencode-browser";
-  }
-}
-
-function getBrokerSocketPath(): string {
-  const override = process.env.OPENCODE_BROWSER_BROKER_SOCKET;
-  if (override) return override;
-  if (process.platform === "win32") return `\\\\.\\pipe\\${getSafePipeName()}`;
-  return join(BASE_DIR, "broker.sock");
-}
-
-mkdirSync(BASE_DIR, { recursive: true });
-
-function logDebug(message: string): void {
-  try {
-    appendFileSync(LOG_PATH, `[${new Date().toISOString()}] ${message}\n`, "utf8");
-  } catch {
-    // ignore
-  }
-}
-
-logDebug(`plugin loaded v${getPackageVersion()} pid=${process.pid} socket=${SOCKET_PATH}`);
-
-const DEFAULT_MAX_UPLOAD_BYTES = 512 * 1024;
-const MAX_UPLOAD_BYTES = (() => {
-  const raw = process.env.OPENCODE_BROWSER_MAX_UPLOAD_BYTES;
-  const value = raw ? Number(raw) : NaN;
-  if (Number.isFinite(value) && value > 0) return value;
-  return DEFAULT_MAX_UPLOAD_BYTES;
-})();
-
-function resolveUploadPath(filePath: string): string {
-  const trimmed = typeof filePath === "string" ? filePath.trim() : "";
-  if (!trimmed) throw new Error("filePath is required");
-  return isAbsolute(trimmed) ? trimmed : resolve(process.cwd(), trimmed);
-}
-
-function buildFileUploadPayload(
-  filePath: string,
-  fileName?: string,
-  mimeType?: string
-): { name: string; mimeType?: string; base64: string } {
-  const absPath = resolveUploadPath(filePath);
-  const stats = statSync(absPath);
-  if (!stats.isFile()) throw new Error(`Not a file: ${absPath}`);
-  if (stats.size > MAX_UPLOAD_BYTES) {
-    throw new Error(
-      `File too large (${stats.size} bytes). Max is ${MAX_UPLOAD_BYTES} bytes (OPENCODE_BROWSER_MAX_UPLOAD_BYTES). ` +
-        `For larger uploads, use OPENCODE_BROWSER_BACKEND=agent.`
-    );
-  }
-  const base64 = readFileSync(absPath).toString("base64");
-  const name = typeof fileName === "string" && fileName.trim() ? fileName.trim() : basename(absPath);
-  const mt = typeof mimeType === "string" && mimeType.trim() ? mimeType.trim() : undefined;
-  return { name, mimeType: mt, base64 };
-}
-
-type BrokerResponse =
-  | { type: "response"; id: number; ok: true; data: any }
-  | { type: "response"; id: number; ok: false; error: string };
-
-function createJsonLineParser(onMessage: (msg: any) => void): (chunk: Buffer) => void {
-  let buffer = "";
-  return (chunk: Buffer) => {
-    buffer += chunk.toString("utf8");
-    while (true) {
-      const idx = buffer.indexOf("\n");
-      if (idx === -1) return;
-      const line = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 1);
-      if (!line.trim()) continue;
-      try {
-        onMessage(JSON.parse(line));
-      } catch {
-        // ignore
-      }
-    }
-  };
-}
-
-function writeJsonLine(socket: net.Socket, msg: any): void {
-  socket.write(JSON.stringify(msg) + "\n");
-}
-
-function maybeStartBroker(): void {
-  const brokerPath = join(BASE_DIR, "broker.cjs");
-  if (!existsSync(brokerPath)) return;
-
-  try {
-    const child = spawn(process.execPath, [brokerPath], { detached: true, stdio: "ignore" });
-    child.unref();
-  } catch {
-    // ignore
-  }
-}
-
-async function connectToBroker(): Promise<net.Socket> {
-  return await new Promise((resolve, reject) => {
-    const socket = net.createConnection(SOCKET_PATH);
-    socket.once("connect", () => resolve(socket));
-    socket.once("error", (err) => {
-      lastBrokerError = err instanceof Error ? err : new Error(String(err));
-      logDebug(`broker connect error socket=${SOCKET_PATH} error=${lastBrokerError.message}`);
-      reject(err);
-    });
-  });
-}
-
-async function sleep(ms: number): Promise<void> {
-  return await new Promise((r) => setTimeout(r, ms));
-}
-
-const BACKEND_MODE = (process.env.OPENCODE_BROWSER_BACKEND ?? process.env.OPENCODE_BROWSER_MODE ?? "extension")
-  .toLowerCase()
-  .trim();
-const USE_AGENT_BACKEND = ["agent", "agent-browser", "agentbrowser"].includes(BACKEND_MODE);
-
-let socket: net.Socket | null = null;
-let lastBrokerError: Error | null = null;
-let sessionId = Math.random().toString(36).slice(2);
-let reqId = 0;
-const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
-
-const agentBackend: AgentBackend | null = USE_AGENT_BACKEND ? createAgentBackend(sessionId) : null;
-
-async function ensureBrokerSocket(): Promise<net.Socket> {
-  if (socket && !socket.destroyed) return socket;
-
-  // Try to connect; if missing, try to start broker and retry.
-  try {
-    socket = await connectToBroker();
-  } catch {
-    maybeStartBroker();
-    for (let i = 0; i < 20; i++) {
-      await sleep(100);
-      try {
-        socket = await connectToBroker();
-        break;
-      } catch {}
-    }
-  }
-
-  if (!socket || socket.destroyed) {
-    const errorMessage = lastBrokerError?.message ? ` (${lastBrokerError.message})` : "";
-    throw new Error(
-      `Could not connect to local broker at ${SOCKET_PATH}${errorMessage}. ` +
-        "Run `npx @different-ai/opencode-browser install` and ensure the extension is loaded."
-    );
-  }
-
-  socket.setNoDelay(true);
-  logDebug(`broker connected socket=${SOCKET_PATH}`);
-  socket.on(
-    "data",
-    createJsonLineParser((msg) => {
-      if (msg?.type !== "response" || typeof msg.id !== "number") return;
-      const p = pending.get(msg.id);
-      if (!p) return;
-      pending.delete(msg.id);
-      const res = msg as BrokerResponse;
-      if (!res.ok) p.reject(new Error(res.error));
-      else p.resolve(res.data);
-    })
-  );
-
-  socket.on("close", () => {
-    socket = null;
-  });
-
-  socket.on("error", () => {
-    socket = null;
-  });
-
-  writeJsonLine(socket, { type: "hello", role: "plugin", sessionId, pid: process.pid });
-
-  return socket;
-}
-
-async function brokerRequest(op: string, payload: Record<string, any>): Promise<any> {
-  const s = await ensureBrokerSocket();
-  const id = ++reqId;
-
-  return await new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    writeJsonLine(s, { type: "request", id, op, ...payload });
-    setTimeout(() => {
-      if (!pending.has(id)) return;
-      pending.delete(id);
-      reject(new Error("Timed out waiting for broker response"));
-    }, 60000);
-  });
-}
-
-async function brokerOnlyRequest(op: string, payload: Record<string, any>): Promise<any> {
-  if (USE_AGENT_BACKEND) {
-    throw new Error("Tab claims are not supported with agent-browser backend");
-  }
-  return await brokerRequest(op, payload);
-}
-
-function toolResultText(data: any, fallback: string): string {
-  if (typeof data?.content === "string") return data.content;
-  if (typeof data === "string") return data;
-  if (data?.content != null) return JSON.stringify(data.content);
-  return fallback;
-}
-
-async function toolRequest(toolName: string, args: Record<string, any>): Promise<any> {
-  if (USE_AGENT_BACKEND) {
-    if (!agentBackend) {
-      throw new Error("Agent backend unavailable: configuration failed to initialize");
-    }
-    return await agentBackend.requestTool(toolName, args);
-  }
-  return await brokerRequest("tool", { tool: toolName, args });
-}
-
-async function statusRequest(): Promise<any> {
-  if (USE_AGENT_BACKEND) {
-    if (!agentBackend) {
-      return {
-        backend: "agent-browser",
-        connected: false,
-        error: "Agent backend unavailable: configuration failed to initialize",
-      };
-    }
-    return await agentBackend.status();
-  }
-  return await brokerRequest("status", {});
-}
-
-const plugin: Plugin = async (ctx) => {
-
+const plugin: Plugin = async () => {
   return {
     tool: {
-      browser_debug: tool({
-        description: "Debug plugin loading and connection status.",
-        args: {},
-        async execute(args, ctx) {
-          const lines = [
-            "loaded: true",
-            `sessionId: ${sessionId}`,
-            `pid: ${process.pid}`,
-            `backend: ${USE_AGENT_BACKEND ? "agent-browser" : "extension"}`,
-            `brokerSocket: ${SOCKET_PATH}`,
-            `agentSession: ${agentBackend?.session ?? ""}`,
-            `agentConnection: ${JSON.stringify(agentBackend?.connection ?? null)}`,
-            `agentBrowserVersion: ${agentBackend?.getVersion?.() ?? ""}`,
-            `pluginVersion: ${getPackageVersion()}`,
-            `timestamp: ${new Date().toISOString()}`,
-          ];
-          return lines.join("\n");
-        },
-      }),
-
-      browser_version: tool({
-        description: "Return the installed @different-ai/opencode-browser plugin version.",
-        args: {},
-        async execute(args, ctx) {
-          return JSON.stringify({
-            name: "@different-ai/opencode-browser",
-            version: getPackageVersion(),
-            sessionId,
-            pid: process.pid,
-            backend: USE_AGENT_BACKEND ? "agent-browser" : "extension",
-            agentBrowserVersion: agentBackend?.getVersion?.() ?? null,
-          });
-        },
-      }),
-
-      browser_status: tool({
-        description: "Check backend connection status and current tab claims.",
-        args: {},
-        async execute(args, ctx) {
-          const data = await statusRequest();
-          return JSON.stringify(data);
-        },
-      }),
-
-      browser_get_tabs: tool({
-        description: "List all open browser tabs",
-        args: {},
-        async execute(args, ctx) {
-          const data = await toolRequest("get_tabs", {});
-          return toolResultText(data, "ok");
-        },
-      }),
-
-      browser_list_claims: tool({
-        description: "List tab ownership claims",
-        args: {},
-        async execute(args, ctx) {
-          const data = await brokerOnlyRequest("list_claims", {});
-          return JSON.stringify(data);
-        },
-      }),
-
-      browser_claim_tab: tool({
-        description: "Claim a browser tab for this session",
+      browser_list: tool({
+        description:
+          "List page targets on a Chrome/Electron CDP endpoint. Returns target IDs, titles, and URLs.",
         args: {
-          tabId: schema.number(),
-          force: schema.boolean().optional(),
+          browser_url: tool.schema
+            .string()
+            .describe('CDP HTTP endpoint, e.g. "http://127.0.0.1:9222"'),
         },
-        async execute({ tabId, force }, ctx) {
-          const data = await brokerOnlyRequest("claim_tab", { tabId, force });
-          return JSON.stringify(data);
-        },
-      }),
-
-      browser_release_tab: tool({
-        description: "Release a claimed browser tab",
-        args: {
-          tabId: schema.number(),
-        },
-        async execute({ tabId }, ctx) {
-          const data = await brokerOnlyRequest("release_tab", { tabId });
-          return JSON.stringify(data);
-        },
-      }),
-
-      browser_open_tab: tool({
-        description: "Open a new browser tab",
-        args: {
-          url: schema.string().optional(),
-          active: schema.boolean().optional(),
-        },
-        async execute({ url, active }, ctx) {
-          const data = await toolRequest("open_tab", { url, active });
-          return toolResultText(data, "Opened new tab");
-        },
-      }),
-
-      browser_close_tab: tool({
-        description: "Close a browser tab owned by this session",
-        args: {
-          tabId: schema.number().optional(),
-        },
-        async execute({ tabId }, ctx) {
-          const data = await toolRequest("close_tab", { tabId });
-          return toolResultText(data, "Closed tab");
+        async execute(args) {
+          const targets = await listTargets(args.browser_url);
+          const pages = targets.filter((t) => t.type === "page");
+          if (pages.length === 0) return "No page targets found.";
+          return pages.map((t) => `[${t.id}] ${t.title}\n  ${t.url}`).join("\n\n");
         },
       }),
 
       browser_navigate: tool({
-        description: "Navigate to a URL in the browser",
+        description: "Navigate a browser target to a URL and return the resulting page title.",
         args: {
-          url: schema.string(),
-          tabId: schema.number().optional(),
+          browser_url: tool.schema.string().describe("CDP HTTP endpoint"),
+          target_id: tool.schema.string().optional().describe("Target ID. Omit for the first page target."),
+          url: tool.schema.string().describe("URL to navigate to"),
         },
-        async execute({ url, tabId }, ctx) {
-          const data = await toolRequest("navigate", { url, tabId });
-          return toolResultText(data, `Navigated to ${url}`);
-        },
-      }),
-
-      browser_click: tool({
-        description: "Click an element on the page using a CSS selector",
-        args: {
-          selector: schema.string(),
-          index: schema.number().optional(),
-          tabId: schema.number().optional(),
-          timeoutMs: schema.number().optional(),
-          pollMs: schema.number().optional(),
-        },
-        async execute({ selector, index, tabId, timeoutMs, pollMs }, ctx) {
-          const data = await toolRequest("click", { selector, index, tabId, timeoutMs, pollMs });
-          return toolResultText(data, `Clicked ${selector}`);
-        },
-      }),
-
-      browser_type: tool({
-        description: "Type text into an input element",
-        args: {
-          selector: schema.string(),
-          text: schema.string(),
-          clear: schema.boolean().optional(),
-          index: schema.number().optional(),
-          tabId: schema.number().optional(),
-          timeoutMs: schema.number().optional(),
-          pollMs: schema.number().optional(),
-        },
-        async execute({ selector, text, clear, index, tabId, timeoutMs, pollMs }, ctx) {
-          const data = await toolRequest("type", { selector, text, clear, index, tabId, timeoutMs, pollMs });
-          return toolResultText(data, `Typed "${text}" into ${selector}`);
-        },
-      }),
-
-      browser_select: tool({
-        description: "Select an option in a native select element",
-        args: {
-          selector: schema.string(),
-          value: schema.string().optional(),
-          label: schema.string().optional(),
-          optionIndex: schema.number().optional(),
-          index: schema.number().optional(),
-          tabId: schema.number().optional(),
-          timeoutMs: schema.number().optional(),
-          pollMs: schema.number().optional(),
-        },
-        async execute({ selector, value, label, optionIndex, index, tabId, timeoutMs, pollMs }, ctx) {
-          const data = await toolRequest("select", { selector, value, label, optionIndex, index, tabId, timeoutMs, pollMs });
-          const summary = value ?? label ?? (optionIndex != null ? String(optionIndex) : "option");
-          return toolResultText(data, `Selected ${summary} in ${selector}`);
-        },
-      }),
-
-      browser_screenshot: tool({
-        description: "Take a screenshot of the current page. Returns base64 image data URL.",
-        args: {
-          tabId: schema.number().optional(),
-        },
-        async execute({ tabId }, ctx) {
-          const data = await toolRequest("screenshot", { tabId });
-          return toolResultText(data, "Screenshot failed");
+        async execute(args) {
+          const { client } = await getClient(args.browser_url, args.target_id);
+          try {
+            await client.send("Page.enable");
+            await client.send("Page.navigate", { url: args.url });
+            await new Promise<void>((resolve) => {
+              const timeout = setTimeout(resolve, 10000);
+              client.on("Page.loadEventFired", () => {
+                clearTimeout(timeout);
+                resolve();
+              });
+            });
+            const result = await client.send("Runtime.evaluate", {
+              expression: "document.title",
+              returnByValue: true,
+            });
+            const title = ((result.result as Record<string, unknown>)?.value as string | undefined) ?? "";
+            return `Navigated to: ${args.url}\nTitle: ${title}`;
+          } finally {
+            client.close();
+          }
         },
       }),
 
       browser_snapshot: tool({
-        description: "Get an accessibility tree snapshot of the page.",
-        args: {
-          tabId: schema.number().optional(),
-        },
-        async execute({ tabId }, ctx) {
-          const data = await toolRequest("snapshot", { tabId });
-          return toolResultText(data, "Snapshot failed");
-        },
-      }),
-
-      browser_scroll: tool({
-        description: "Scroll the page or scroll an element into view",
-        args: {
-          selector: schema.string().optional(),
-          x: schema.number().optional(),
-          y: schema.number().optional(),
-          tabId: schema.number().optional(),
-          timeoutMs: schema.number().optional(),
-          pollMs: schema.number().optional(),
-        },
-        async execute({ selector, x, y, tabId, timeoutMs, pollMs }, ctx) {
-          const data = await toolRequest("scroll", { selector, x, y, tabId, timeoutMs, pollMs });
-          return toolResultText(data, "Scrolled");
-        },
-      }),
-
-      browser_wait: tool({
-        description: "Wait for a specified duration",
-        args: {
-          ms: schema.number().optional(),
-          tabId: schema.number().optional(),
-        },
-        async execute({ ms, tabId }, ctx) {
-          const data = await toolRequest("wait", { ms, tabId });
-          return toolResultText(data, "Waited");
-        },
-      }),
-
-      browser_query: tool({
         description:
-          "Read data from the page using selectors, optional wait, or page_text extraction (shadow DOM + same-origin iframes).",
+          "Get an accessibility tree snapshot with [uid] markers. Use the UIDs with browser_click and browser_fill.",
         args: {
-          selector: schema.string().optional(),
-          mode: schema.string().optional(),
-          attribute: schema.string().optional(),
-          property: schema.string().optional(),
-          index: schema.number().optional(),
-          limit: schema.number().optional(),
-          timeoutMs: schema.number().optional(),
-          pollMs: schema.number().optional(),
-          pattern: schema.string().optional(),
-          flags: schema.string().optional(),
-          tabId: schema.number().optional(),
+          browser_url: tool.schema.string().describe("CDP HTTP endpoint"),
+          target_id: tool.schema.string().optional().describe("Target ID. Omit for the first page target."),
         },
-        async execute({ selector, mode, attribute, property, index, limit, timeoutMs, pollMs, pattern, flags, tabId }, ctx) {
-          const data = await toolRequest("query", {
-            selector,
-            mode,
-            attribute,
-            property,
-            index,
-            limit,
-            timeoutMs,
-            pollMs,
-            pattern,
-            flags,
-            tabId,
-          });
-          return toolResultText(data, "Query failed");
-        },
-      }),
-
-      browser_download: tool({
-        description: "Download a file via URL or by clicking an element on the page.",
-        args: {
-          url: schema.string().optional(),
-          selector: schema.string().optional(),
-          filename: schema.string().optional(),
-          conflictAction: schema.string().optional(),
-          saveAs: schema.boolean().optional(),
-          wait: schema.boolean().optional(),
-          downloadTimeoutMs: schema.number().optional(),
-          index: schema.number().optional(),
-          tabId: schema.number().optional(),
-          timeoutMs: schema.number().optional(),
-          pollMs: schema.number().optional(),
-        },
-        async execute(
-          { url, selector, filename, conflictAction, saveAs, wait, downloadTimeoutMs, index, tabId, timeoutMs, pollMs },
-          ctx
-        ) {
-          const data = await toolRequest("download", {
-            url,
-            selector,
-            filename,
-            conflictAction,
-            saveAs,
-            wait,
-            downloadTimeoutMs,
-            index,
-            tabId,
-            timeoutMs,
-            pollMs,
-          });
-          return toolResultText(data, "Download started");
-        },
-      }),
-
-      browser_list_downloads: tool({
-        description: "List recent downloads (Chrome backend) or session downloads (agent backend).",
-        args: {
-          limit: schema.number().optional(),
-          state: schema.string().optional(),
-        },
-        async execute({ limit, state }, ctx) {
-          const data = await toolRequest("list_downloads", { limit, state });
-          return toolResultText(data, "[]");
-        },
-      }),
-
-      browser_set_file_input: tool({
-        description: "Set a file input element's selected file using a local file path.",
-        args: {
-          selector: schema.string(),
-          filePath: schema.string(),
-          fileName: schema.string().optional(),
-          mimeType: schema.string().optional(),
-          index: schema.number().optional(),
-          tabId: schema.number().optional(),
-          timeoutMs: schema.number().optional(),
-          pollMs: schema.number().optional(),
-        },
-        async execute({ selector, filePath, fileName, mimeType, index, tabId, timeoutMs, pollMs }, ctx) {
-          if (USE_AGENT_BACKEND) {
-            const data = await toolRequest("set_file_input", { selector, filePath, tabId, index, timeoutMs, pollMs });
-            return toolResultText(data, "Set file input");
+        async execute(args) {
+          const { client } = await getClient(args.browser_url, args.target_id);
+          try {
+            await client.send("Accessibility.enable");
+            const snap = await takeSnapshot(client);
+            snapshotCache.set(cacheKey(args.browser_url, args.target_id), snap);
+            if (!snap.text || snap.text === "(empty page)") {
+              const result = await client.send("Runtime.evaluate", {
+                expression: "document.body?.innerText?.substring(0, 3000) ?? '(empty)'",
+                returnByValue: true,
+              });
+              return `Page text:\n${(result.result as Record<string, unknown>)?.value ?? "(empty)"}`;
+            }
+            return snap.text;
+          } finally {
+            client.close();
           }
-
-          const file = buildFileUploadPayload(filePath, fileName, mimeType);
-          const data = await toolRequest("set_file_input", {
-            selector,
-            tabId,
-            index,
-            timeoutMs,
-            pollMs,
-            files: [file],
-          });
-          return toolResultText(data, "Set file input");
         },
       }),
 
-      browser_highlight: tool({
-        description: "Highlight an element on the page with a colored border for visual debugging.",
+      browser_click: tool({
+        description: "Click an element identified by its snapshot UID. Call browser_snapshot first.",
         args: {
-          selector: schema.string(),
-          index: schema.number().optional(),
-          duration: schema.number().optional(),
-          color: schema.string().optional(),
-          showInfo: schema.boolean().optional(),
-          tabId: schema.number().optional(),
-          timeoutMs: schema.number().optional(),
-          pollMs: schema.number().optional(),
+          browser_url: tool.schema.string().describe("CDP HTTP endpoint"),
+          target_id: tool.schema.string().optional().describe("Target ID"),
+          uid: tool.schema.number().describe("Element UID from browser_snapshot"),
         },
-        async execute({ selector, index, duration, color, showInfo, tabId, timeoutMs, pollMs }, ctx) {
-          const data = await toolRequest("highlight", {
-            selector,
-            index,
-            duration,
-            color,
-            showInfo,
-            tabId,
-            timeoutMs,
-            pollMs,
-          });
-          return toolResultText(data, "Highlight failed");
+        async execute(args) {
+          const snap = snapshotCache.get(cacheKey(args.browser_url, args.target_id));
+          if (!snap) return "No snapshot cached. Call browser_snapshot first.";
+          const node = resolveUid(snap, args.uid);
+          if (!node) return `UID ${args.uid} not found in snapshot.`;
+
+          const { client } = await getClient(args.browser_url, args.target_id);
+          try {
+            const resolved = await client.send("DOM.resolveNode", { backendNodeId: node.backendNodeId });
+            const objectId = (resolved.object as Record<string, unknown>)?.objectId as string | undefined;
+            if (!objectId) return `Could not resolve UID ${args.uid} to a DOM node.`;
+
+            const box = await client.send("DOM.getBoxModel", { backendNodeId: node.backendNodeId });
+            const model = box.model as Record<string, unknown> | undefined;
+            const content = model?.content as number[] | undefined;
+
+            if (content && content.length >= 8) {
+              const x = (content[0] + content[2] + content[4] + content[6]) / 4;
+              const y = (content[1] + content[3] + content[5] + content[7]) / 4;
+              await client.send("Input.dispatchMouseEvent", {
+                type: "mousePressed",
+                x,
+                y,
+                button: "left",
+                clickCount: 1,
+              });
+              await client.send("Input.dispatchMouseEvent", {
+                type: "mouseReleased",
+                x,
+                y,
+                button: "left",
+                clickCount: 1,
+              });
+              return `Clicked [${args.uid}] "${node.name}" at (${Math.round(x)}, ${Math.round(y)})`;
+            }
+
+            await client.send("Runtime.callFunctionOn", {
+              objectId,
+              functionDeclaration: "function() { this.scrollIntoView({ block: 'center' }); this.click(); }",
+            });
+            return `Clicked [${args.uid}] "${node.name}" via JS fallback`;
+          } finally {
+            client.close();
+          }
         },
       }),
 
-      browser_console: tool({
-        description:
-          "Read console log messages from the page. Uses chrome.debugger API for complete capture. " +
-          "The debugger attaches lazily on first call and may show a banner in the browser.",
+      browser_fill: tool({
+        description: "Fill an input element identified by its snapshot UID. Clears the existing value first.",
         args: {
-          tabId: schema.number().optional(),
-          clear: schema.boolean().optional(),
-          filter: schema.string().optional(),
+          browser_url: tool.schema.string().describe("CDP HTTP endpoint"),
+          target_id: tool.schema.string().optional().describe("Target ID"),
+          uid: tool.schema.number().describe("Element UID from browser_snapshot"),
+          value: tool.schema.string().describe("Text to fill"),
         },
-        async execute({ tabId, clear, filter }, ctx) {
-          const data = await toolRequest("console", { tabId, clear, filter });
-          return toolResultText(data, "[]");
+        async execute(args) {
+          const snap = snapshotCache.get(cacheKey(args.browser_url, args.target_id));
+          if (!snap) return "No snapshot cached. Call browser_snapshot first.";
+          const node = resolveUid(snap, args.uid);
+          if (!node) return `UID ${args.uid} not found in snapshot.`;
+
+          const { client } = await getClient(args.browser_url, args.target_id);
+          try {
+            const resolved = await client.send("DOM.resolveNode", { backendNodeId: node.backendNodeId });
+            const objectId = (resolved.object as Record<string, unknown>)?.objectId as string | undefined;
+            if (!objectId) return `Could not resolve UID ${args.uid}.`;
+
+            await client.send("Runtime.callFunctionOn", {
+              objectId,
+              functionDeclaration: `function() {
+                this.focus();
+                this.value = '';
+                this.dispatchEvent(new Event('input', { bubbles: true }));
+              }`,
+            });
+
+            for (const char of args.value) {
+              await client.send("Input.dispatchKeyEvent", { type: "keyDown", text: char });
+              await client.send("Input.dispatchKeyEvent", { type: "keyUp", text: char });
+            }
+
+            return `Filled [${args.uid}] "${node.name}" with "${args.value}"`;
+          } finally {
+            client.close();
+          }
         },
       }),
 
-      browser_errors: tool({
-        description:
-          "Read JavaScript errors from the page. Uses chrome.debugger API for complete capture. " +
-          "The debugger attaches lazily on first call and may show a banner in the browser.",
+      browser_eval: tool({
+        description: "Evaluate a JavaScript expression in the page and return the result.",
         args: {
-          tabId: schema.number().optional(),
-          clear: schema.boolean().optional(),
+          browser_url: tool.schema.string().describe("CDP HTTP endpoint"),
+          target_id: tool.schema.string().optional().describe("Target ID"),
+          expression: tool.schema.string().describe("JavaScript expression to evaluate"),
         },
-        async execute({ tabId, clear }, ctx) {
-          const data = await toolRequest("errors", { tabId, clear });
-          return toolResultText(data, "[]");
+        async execute(args) {
+          const { client } = await getClient(args.browser_url, args.target_id);
+          try {
+            const result = await client.send("Runtime.evaluate", {
+              expression: args.expression,
+              returnByValue: true,
+              awaitPromise: true,
+            });
+            if (result.exceptionDetails) {
+              const err = result.exceptionDetails as Record<string, unknown>;
+              return `Error: ${err.text ?? JSON.stringify(err)}`;
+            }
+            const val = (result.result as Record<string, unknown>)?.value;
+            if (val === undefined) return "(undefined)";
+            return typeof val === "string" ? val : JSON.stringify(val, null, 2);
+          } finally {
+            client.close();
+          }
+        },
+      }),
+
+      browser_screenshot: tool({
+        description: "Take a PNG screenshot of the page and return the saved file path.",
+        args: {
+          browser_url: tool.schema.string().describe("CDP HTTP endpoint"),
+          target_id: tool.schema.string().optional().describe("Target ID"),
+        },
+        async execute(args) {
+          const { client } = await getClient(args.browser_url, args.target_id);
+          try {
+            const result = await client.send("Page.captureScreenshot", { format: "png" });
+            const data = result.data as string | undefined;
+            if (!data) return "Failed to capture screenshot.";
+            const path = join(tmpdir(), `browser-screenshot-${Date.now()}.png`);
+            writeFileSync(path, Buffer.from(data, "base64"));
+            return `Screenshot saved: ${path}\n(${Math.round((data.length * 0.75) / 1024)} KB)`;
+          } finally {
+            client.close();
+          }
         },
       }),
     },
