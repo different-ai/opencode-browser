@@ -5,14 +5,14 @@ import plugin from "../dist/plugin.js";
 const DEFAULT_BROWSER_URL = process.env.OPENCODE_BROWSER_URL || "http://127.0.0.1:9222";
 
 function usage() {
-  console.log(`OpenCode Browser
+  console.log(`OpenCode Chrome DevTools
 
 Usage:
-  opencode-browser tools
-  opencode-browser tool <toolName> [argsJson]
-  opencode-browser tool <toolName> --args '{"browser_url":"http://127.0.0.1:9222"}'
-  opencode-browser status [browser_url]
-  opencode-browser self-test [browser_url]
+  opencode-chrome-devtools tools
+  opencode-chrome-devtools tool <toolName> [argsJson]
+  opencode-chrome-devtools tool <toolName> --args '{"browser_url":"http://127.0.0.1:9222"}'
+  opencode-chrome-devtools status [browser_url]
+  opencode-chrome-devtools self-test [browser_url]
 
 Every browser tool uses direct CDP. Start Chrome with remote debugging enabled, for example:
   /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222
@@ -66,7 +66,7 @@ async function listTools() {
 
 async function runTool(argv) {
   const toolName = argv[0];
-  if (!toolName) throw new Error("Usage: opencode-browser tool <toolName> [argsJson]");
+  if (!toolName) throw new Error("Usage: opencode-chrome-devtools tool <toolName> [argsJson]");
   const args = parseToolArgs(argv.slice(1));
   const result = await executeTool(toolName, args);
   console.log(typeof result === "string" ? result : JSON.stringify(result, null, 2));

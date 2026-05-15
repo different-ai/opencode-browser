@@ -1,4 +1,4 @@
-# OpenCode Browser
+# OpenCode Chrome DevTools
 
 Browser automation plugin for [OpenCode](https://opencode.ai) using direct Chrome DevTools Protocol (CDP) connections.
 
@@ -18,7 +18,7 @@ Install or link the package, then add it to `opencode.json` or `opencode.jsonc`:
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@different-ai/opencode-browser"]
+  "plugin": ["opencode-chrome-devtools"]
 }
 ```
 
@@ -39,9 +39,9 @@ For Electron apps, pass the app's exposed CDP endpoint as `browser_url`.
 The CLI can list tools and run a tool directly after `bun run build`:
 
 ```bash
-npx @different-ai/opencode-browser tools
-npx @different-ai/opencode-browser tool browser_list --args '{"browser_url":"http://127.0.0.1:9222"}'
-npx @different-ai/opencode-browser tool browser_snapshot --args '{"browser_url":"http://127.0.0.1:9222"}'
+npx opencode-chrome-devtools tools
+npx opencode-chrome-devtools tool browser_list --args '{"browser_url":"http://127.0.0.1:9222"}'
+npx opencode-chrome-devtools tool browser_snapshot --args '{"browser_url":"http://127.0.0.1:9222"}'
 ```
 
 If you omit `browser_url` in CLI calls, `OPENCODE_BROWSER_URL` is used, then `http://127.0.0.1:9222`.

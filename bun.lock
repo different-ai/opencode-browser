@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "@different-ai/opencode-browser",
+      "name": "opencode-chrome-devtools",
       "dependencies": {
         "ws": "^8.18.3",
       },
