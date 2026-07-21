@@ -32,7 +32,22 @@ function walkAXTree(
   const backendNodeId = (axNode.backendDOMNodeId as number | undefined) ?? 0;
   const ignored = axNode.ignored as boolean;
 
-  if (ignored && !name) return null;
+  if (ignored && !name) {
+    const childIds = (axNode.childIds as string[] | undefined) ?? [];
+    const children: SnapshotNode[] = [];
+    for (const childId of childIds) {
+      const childAx = allNodes[childId];
+      if (!childAx) continue;
+      const childNode = walkAXTree(childAx, allNodes, byUid);
+      if (childNode) children.push(childNode);
+    }
+    if (children.length === 0) return null;
+    if (children.length === 1) return children[0];
+    const uid = nextUid++;
+    const node: SnapshotNode = { uid, role: "generic", children };
+    byUid.set(uid, node);
+    return node;
+  }
 
   const uid = nextUid++;
   const children: SnapshotNode[] = [];
