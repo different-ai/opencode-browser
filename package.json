@@ -19,6 +19,7 @@
   ],
   "scripts": {
     "build": "bun build src/plugin.ts --target=node --outfile=dist/plugin.js",
+    "test": "bun test",
     "prepublishOnly": "bun run build",
     "publish": "node -e \"if (process.env.npm_command === 'publish') process.exit(0); require('child_process').execSync('npm publish --access public', { stdio: 'inherit' });\"",
     "status": "node bin/cli.js status",
