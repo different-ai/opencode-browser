@@ -2,7 +2,7 @@
  * Accessibility-tree-based page snapshots with stable UIDs for follow-up actions.
  */
 
-import type { CDPClient } from "./cdp.js";
+import type { CDPClient, CDPRequestOptions } from "./cdp.js";
 
 export type SnapshotNode = {
   uid: number;
@@ -74,10 +74,10 @@ function renderTree(nodes: SnapshotNode[], indent = 0): string {
   return lines.join("\n");
 }
 
-export async function takeSnapshot(client: CDPClient): Promise<Snapshot> {
+export async function takeSnapshot(client: CDPClient, options: CDPRequestOptions = {}): Promise<Snapshot> {
   nextUid = 1;
 
-  const result = await client.send("Accessibility.getFullAXTree");
+  const result = await client.send("Accessibility.getFullAXTree", {}, options);
   const axNodes = result.nodes as Array<Record<string, unknown>> | undefined;
 
   if (!axNodes || axNodes.length === 0) {

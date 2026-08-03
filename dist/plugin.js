@@ -4,25 +4,43 @@ var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+function __accessProp(key) {
+  return this[key];
+}
+var __toESMCache_node;
+var __toESMCache_esm;
 var __toESM = (mod, isNodeMode, target) => {
+  var canCache = mod != null && typeof mod === "object";
+  if (canCache) {
+    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
+    var cached = cache.get(mod);
+    if (cached)
+      return cached;
+  }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
   for (let key of __getOwnPropNames(mod))
     if (!__hasOwnProp.call(to, key))
       __defProp(to, key, {
-        get: () => mod[key],
+        get: __accessProp.bind(mod, key),
         enumerable: true
       });
+  if (canCache)
+    cache.set(mod, to);
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
       get: all[name],
       enumerable: true,
       configurable: true,
-      set: (newValue) => all[name] = () => newValue
+      set: __exportSetter.bind(all, name)
     });
 };
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
@@ -13615,7 +13633,7 @@ class JSONSchemaGenerator {
               if (val === undefined) {
                 if (this.unrepresentable === "throw") {
                   throw new Error("Literal `undefined` cannot be represented in JSON Schema");
-                } else {}
+                }
               } else if (typeof val === "bigint") {
                 if (this.unrepresentable === "throw") {
                   throw new Error("BigInt literals cannot be represented in JSON Schema");
@@ -15221,6 +15239,42 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 var wrapper_default = import_websocket.default;
 
 // src/lib/cdp.ts
+var DEFAULT_CDP_DISCOVERY_TIMEOUT_MS = 5000;
+var DEFAULT_CDP_CONNECTION_TIMEOUT_MS = 5000;
+var DEFAULT_CDP_COMMAND_TIMEOUT_MS = 30000;
+function createDeadline(timeoutMs, parentSignal) {
+  const controller = new AbortController;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const onParentAbort = () => controller.abort(parentSignal?.reason);
+  if (parentSignal) {
+    if (parentSignal.aborted)
+      onParentAbort();
+    else
+      parentSignal.addEventListener("abort", onParentAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    didTimeout: () => timedOut,
+    cleanup: () => {
+      clearTimeout(timeout);
+      parentSignal?.removeEventListener("abort", onParentAbort);
+    }
+  };
+}
+function asError(value, fallback) {
+  return value instanceof Error ? value : new Error(`${fallback}: ${String(value)}`);
+}
+function timeoutError(stage, timeoutMs, endpoint) {
+  return new Error(`CDP ${stage} timed out after ${timeoutMs}ms: ${endpoint}`);
+}
+function cancellationError(stage) {
+  return new Error(`CDP ${stage} cancelled`);
+}
+
 class CDPClient {
   endpoint;
   ws = null;
@@ -15230,55 +15284,134 @@ class CDPClient {
   constructor(endpoint) {
     this.endpoint = endpoint;
   }
-  async connect() {
+  async connect(options = {}) {
     if (this.ws?.readyState === wrapper_default.OPEN)
       return;
+    const timeoutMs = options.timeoutMs ?? DEFAULT_CDP_CONNECTION_TIMEOUT_MS;
+    const deadline = createDeadline(timeoutMs, options.signal);
     return await new Promise((resolve, reject) => {
-      this.ws = new wrapper_default(this.endpoint);
-      this.ws.once("open", () => resolve());
-      this.ws.once("error", (err) => reject(err));
-      this.ws.on("message", (data) => {
-        const msg = JSON.parse(data.toString());
-        if (msg.id !== undefined && this.pending.has(msg.id)) {
-          const p = this.pending.get(msg.id);
-          this.pending.delete(msg.id);
-          p.resolve(msg);
-        }
-        if (msg.method && this.eventHandlers.has(msg.method)) {
-          for (const handler of this.eventHandlers.get(msg.method)) {
-            handler(msg.params ?? {});
+      let socket = null;
+      let settled = false;
+      const cleanup = () => {
+        deadline.signal.removeEventListener("abort", onAbort);
+        deadline.cleanup();
+      };
+      const fail = (error45) => {
+        if (settled)
+          return;
+        settled = true;
+        cleanup();
+        if (this.ws === socket)
+          this.ws = null;
+        socket?.terminate();
+        reject(asError(error45, "CDP connection failed"));
+      };
+      const succeed = () => {
+        if (settled)
+          return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const onAbort = () => {
+        fail(deadline.didTimeout() ? timeoutError("connection", timeoutMs, this.endpoint) : cancellationError("connection"));
+      };
+      deadline.signal.addEventListener("abort", onAbort, { once: true });
+      if (deadline.signal.aborted) {
+        onAbort();
+        return;
+      }
+      try {
+        socket = new wrapper_default(this.endpoint);
+        this.ws = socket;
+        socket.once("open", succeed);
+        socket.on("error", (error45) => {
+          if (!settled)
+            fail(error45);
+          else
+            this.rejectPending(asError(error45, "CDP connection failed"));
+        });
+        socket.on("message", (data) => {
+          let msg;
+          try {
+            msg = JSON.parse(data.toString());
+          } catch (error45) {
+            this.rejectPending(asError(error45, "Invalid CDP message"));
+            return;
           }
-        }
-      });
-      this.ws.on("close", () => {
-        this.ws = null;
-      });
+          if (msg.id !== undefined && this.pending.has(msg.id)) {
+            const p = this.pending.get(msg.id);
+            this.pending.delete(msg.id);
+            p.resolve(msg);
+          }
+          if (msg.method && this.eventHandlers.has(msg.method)) {
+            for (const handler of this.eventHandlers.get(msg.method)) {
+              handler(msg.params ?? {});
+            }
+          }
+        });
+        socket.on("close", () => {
+          if (!settled) {
+            fail(new Error("CDP connection closed before opening"));
+            return;
+          }
+          if (this.ws === socket)
+            this.ws = null;
+          this.rejectPending(new Error("CDP connection closed"));
+        });
+      } catch (error45) {
+        fail(error45);
+      }
     });
   }
-  async send(method, params = {}) {
+  rejectPending(error45) {
+    for (const pending of this.pending.values()) {
+      pending.reject(error45);
+    }
+    this.pending.clear();
+  }
+  async send(method, params = {}, options = {}) {
     if (!this.ws || this.ws.readyState !== wrapper_default.OPEN) {
       throw new Error("CDP not connected");
     }
     const id = ++this.id;
+    const timeoutMs = options.timeoutMs ?? DEFAULT_CDP_COMMAND_TIMEOUT_MS;
+    const deadline = createDeadline(timeoutMs, options.signal);
     return await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
+      const cleanup = () => {
+        deadline.signal.removeEventListener("abort", onAbort);
+        deadline.cleanup();
+      };
+      const onAbort = () => {
         this.pending.delete(id);
-        reject(new Error(`CDP timeout: ${method}`));
-      }, 30000);
+        cleanup();
+        reject(deadline.didTimeout() ? timeoutError(`command ${method}`, timeoutMs, this.endpoint) : cancellationError(`command ${method}`));
+      };
       this.pending.set(id, {
         resolve: (msg) => {
-          clearTimeout(timeout);
+          cleanup();
           if (msg.error)
             reject(new Error(`CDP error: ${msg.error.message}`));
           else
             resolve(msg.result ?? {});
         },
-        reject: (err) => {
-          clearTimeout(timeout);
-          reject(err);
+        reject: (error45) => {
+          cleanup();
+          reject(error45);
         }
       });
-      this.ws.send(JSON.stringify({ id, method, params }));
+      deadline.signal.addEventListener("abort", onAbort, { once: true });
+      if (deadline.signal.aborted) {
+        onAbort();
+        return;
+      }
+      try {
+        this.ws.send(JSON.stringify({ id, method, params }));
+      } catch (error45) {
+        this.pending.delete(id);
+        cleanup();
+        reject(asError(error45, `Failed to send CDP command ${method}`));
+      }
     });
   }
   on(event, handler) {
@@ -15286,41 +15419,60 @@ class CDPClient {
       this.eventHandlers.set(event, []);
     this.eventHandlers.get(event).push(handler);
   }
-  close() {
-    this.ws?.close();
+  close(error45 = new Error("CDP connection closed")) {
+    const socket = this.ws;
     this.ws = null;
+    this.rejectPending(error45);
+    if (!socket)
+      return;
+    if (socket.readyState === wrapper_default.OPEN)
+      socket.close();
+    else
+      socket.terminate();
   }
 }
-async function listTargets(browserUrl) {
+async function listTargets(browserUrl, options = {}) {
   const url2 = browserUrl.replace(/\/$/, "");
-  const res = await fetch(`${url2}/json/list`);
-  if (!res.ok)
-    throw new Error(`Failed to list targets: ${res.status}`);
-  const targets = await res.json();
-  const parsed = new URL(url2);
-  const isProxy = !["localhost", "127.0.0.1", "0.0.0.0"].includes(parsed.hostname);
-  if (isProxy) {
-    const wsScheme = parsed.protocol === "https:" ? "wss:" : "ws:";
-    for (const target of targets) {
-      if (target.webSocketDebuggerUrl) {
-        const wsPath = new URL(target.webSocketDebuggerUrl).pathname;
-        target.webSocketDebuggerUrl = `${wsScheme}//${parsed.host}${wsPath}`;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_CDP_DISCOVERY_TIMEOUT_MS;
+  const deadline = createDeadline(timeoutMs, options.signal);
+  try {
+    const res = await fetch(`${url2}/json/list`, { signal: deadline.signal });
+    if (!res.ok)
+      throw new Error(`Failed to list targets: ${res.status}`);
+    const targets = await res.json();
+    const parsed = new URL(url2);
+    const isProxy = !["localhost", "127.0.0.1", "0.0.0.0"].includes(parsed.hostname);
+    if (isProxy) {
+      const wsScheme = parsed.protocol === "https:" ? "wss:" : "ws:";
+      for (const target of targets) {
+        if (target.webSocketDebuggerUrl) {
+          const wsPath = new URL(target.webSocketDebuggerUrl).pathname;
+          target.webSocketDebuggerUrl = `${wsScheme}//${parsed.host}${wsPath}`;
+        }
       }
     }
+    return targets;
+  } catch (error45) {
+    if (deadline.didTimeout())
+      throw timeoutError("target discovery", timeoutMs, url2);
+    if (options.signal?.aborted)
+      throw cancellationError("target discovery");
+    throw error45;
+  } finally {
+    deadline.cleanup();
   }
-  return targets;
 }
-async function connectTarget(wsUrl) {
+async function connectTarget(wsUrl, options = {}) {
   const client = new CDPClient(wsUrl);
-  await client.connect();
+  await client.connect(options);
   return client;
 }
-async function connectFirstPage(browserUrl) {
-  const targets = await listTargets(browserUrl);
+async function connectFirstPage(browserUrl, options = {}) {
+  const targets = await listTargets(browserUrl, options);
   const page = targets.find((t) => t.type === "page");
   if (!page)
     throw new Error("No page target found");
-  const client = await connectTarget(page.webSocketDebuggerUrl);
+  const client = await connectTarget(page.webSocketDebuggerUrl, options);
   return { client, target: { id: page.id, title: page.title, url: page.url } };
 }
 
@@ -15375,9 +15527,9 @@ function renderTree(nodes, indent = 0) {
   return lines.join(`
 `);
 }
-async function takeSnapshot(client) {
+async function takeSnapshot(client, options = {}) {
   nextUid = 1;
-  const result = await client.send("Accessibility.getFullAXTree");
+  const result = await client.send("Accessibility.getFullAXTree", {}, options);
   const axNodes = result.nodes;
   if (!axNodes || axNodes.length === 0) {
     return { nodes: [], byUid: new Map, text: "(empty page)" };
@@ -15402,15 +15554,40 @@ var snapshotCache = new Map;
 function cacheKey(browserUrl, targetId) {
   return `${browserUrl}::${targetId ?? "default"}`;
 }
-async function getClient(browserUrl, targetId) {
+async function getClient(browserUrl, targetId, signal) {
+  const options = { signal };
   if (targetId) {
-    const targets = await listTargets(browserUrl);
+    const targets = await listTargets(browserUrl, options);
     const target = targets.find((t) => t.id === targetId);
     if (!target)
       throw new Error(`Target ${targetId} not found`);
-    return { client: await connectTarget(target.webSocketDebuggerUrl), target };
+    return { client: await connectTarget(target.webSocketDebuggerUrl, options), target };
   }
-  return connectFirstPage(browserUrl);
+  return connectFirstPage(browserUrl, options);
+}
+function waitForPageLoad(client, signal) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => finish(), 1e4);
+    const onAbort = () => finish(new Error("CDP navigation cancelled"));
+    const finish = (error45) => {
+      if (settled)
+        return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      if (error45)
+        reject(error45);
+      else
+        resolve();
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    client.on("Page.loadEventFired", () => finish());
+  });
 }
 var plugin = async () => {
   return {
@@ -15420,8 +15597,8 @@ var plugin = async () => {
         args: {
           browser_url: tool.schema.string().describe('CDP HTTP endpoint, e.g. "http://127.0.0.1:9222"')
         },
-        async execute(args) {
-          const targets = await listTargets(args.browser_url);
+        async execute(args, context) {
+          const targets = await listTargets(args.browser_url, { signal: context.abort });
           const pages = targets.filter((t) => t.type === "page");
           if (pages.length === 0)
             return "No page targets found.";
@@ -15438,22 +15615,16 @@ var plugin = async () => {
           target_id: tool.schema.string().optional().describe("Target ID. Omit for the first page target."),
           url: tool.schema.string().describe("URL to navigate to")
         },
-        async execute(args) {
-          const { client } = await getClient(args.browser_url, args.target_id);
+        async execute(args, context) {
+          const { client } = await getClient(args.browser_url, args.target_id, context.abort);
           try {
-            await client.send("Page.enable");
-            await client.send("Page.navigate", { url: args.url });
-            await new Promise((resolve) => {
-              const timeout = setTimeout(resolve, 1e4);
-              client.on("Page.loadEventFired", () => {
-                clearTimeout(timeout);
-                resolve();
-              });
-            });
+            await client.send("Page.enable", {}, { signal: context.abort });
+            await client.send("Page.navigate", { url: args.url }, { signal: context.abort });
+            await waitForPageLoad(client, context.abort);
             const result = await client.send("Runtime.evaluate", {
               expression: "document.title",
               returnByValue: true
-            });
+            }, { signal: context.abort });
             const title = result.result?.value ?? "";
             return `Navigated to: ${args.url}
 Title: ${title}`;
@@ -15468,17 +15639,17 @@ Title: ${title}`;
           browser_url: tool.schema.string().describe("CDP HTTP endpoint"),
           target_id: tool.schema.string().optional().describe("Target ID. Omit for the first page target.")
         },
-        async execute(args) {
-          const { client } = await getClient(args.browser_url, args.target_id);
+        async execute(args, context) {
+          const { client } = await getClient(args.browser_url, args.target_id, context.abort);
           try {
-            await client.send("Accessibility.enable");
-            const snap = await takeSnapshot(client);
+            await client.send("Accessibility.enable", {}, { signal: context.abort });
+            const snap = await takeSnapshot(client, { signal: context.abort });
             snapshotCache.set(cacheKey(args.browser_url, args.target_id), snap);
             if (!snap.text || snap.text === "(empty page)") {
               const result = await client.send("Runtime.evaluate", {
                 expression: "document.body?.innerText?.substring(0, 3000) ?? '(empty)'",
                 returnByValue: true
-              });
+              }, { signal: context.abort });
               return `Page text:
 ${result.result?.value ?? "(empty)"}`;
             }
@@ -15495,20 +15666,20 @@ ${result.result?.value ?? "(empty)"}`;
           target_id: tool.schema.string().optional().describe("Target ID"),
           uid: tool.schema.number().describe("Element UID from browser_snapshot")
         },
-        async execute(args) {
+        async execute(args, context) {
           const snap = snapshotCache.get(cacheKey(args.browser_url, args.target_id));
           if (!snap)
             return "No snapshot cached. Call browser_snapshot first.";
           const node = resolveUid(snap, args.uid);
           if (!node)
             return `UID ${args.uid} not found in snapshot.`;
-          const { client } = await getClient(args.browser_url, args.target_id);
+          const { client } = await getClient(args.browser_url, args.target_id, context.abort);
           try {
-            const resolved = await client.send("DOM.resolveNode", { backendNodeId: node.backendNodeId });
+            const resolved = await client.send("DOM.resolveNode", { backendNodeId: node.backendNodeId }, { signal: context.abort });
             const objectId = resolved.object?.objectId;
             if (!objectId)
               return `Could not resolve UID ${args.uid} to a DOM node.`;
-            const box = await client.send("DOM.getBoxModel", { backendNodeId: node.backendNodeId });
+            const box = await client.send("DOM.getBoxModel", { backendNodeId: node.backendNodeId }, { signal: context.abort });
             const model = box.model;
             const content = model?.content;
             if (content && content.length >= 8) {
@@ -15520,20 +15691,20 @@ ${result.result?.value ?? "(empty)"}`;
                 y,
                 button: "left",
                 clickCount: 1
-              });
+              }, { signal: context.abort });
               await client.send("Input.dispatchMouseEvent", {
                 type: "mouseReleased",
                 x,
                 y,
                 button: "left",
                 clickCount: 1
-              });
+              }, { signal: context.abort });
               return `Clicked [${args.uid}] "${node.name}" at (${Math.round(x)}, ${Math.round(y)})`;
             }
             await client.send("Runtime.callFunctionOn", {
               objectId,
               functionDeclaration: "function() { this.scrollIntoView({ block: 'center' }); this.click(); }"
-            });
+            }, { signal: context.abort });
             return `Clicked [${args.uid}] "${node.name}" via JS fallback`;
           } finally {
             client.close();
@@ -15548,16 +15719,16 @@ ${result.result?.value ?? "(empty)"}`;
           uid: tool.schema.number().describe("Element UID from browser_snapshot"),
           value: tool.schema.string().describe("Text to fill")
         },
-        async execute(args) {
+        async execute(args, context) {
           const snap = snapshotCache.get(cacheKey(args.browser_url, args.target_id));
           if (!snap)
             return "No snapshot cached. Call browser_snapshot first.";
           const node = resolveUid(snap, args.uid);
           if (!node)
             return `UID ${args.uid} not found in snapshot.`;
-          const { client } = await getClient(args.browser_url, args.target_id);
+          const { client } = await getClient(args.browser_url, args.target_id, context.abort);
           try {
-            const resolved = await client.send("DOM.resolveNode", { backendNodeId: node.backendNodeId });
+            const resolved = await client.send("DOM.resolveNode", { backendNodeId: node.backendNodeId }, { signal: context.abort });
             const objectId = resolved.object?.objectId;
             if (!objectId)
               return `Could not resolve UID ${args.uid}.`;
@@ -15568,10 +15739,10 @@ ${result.result?.value ?? "(empty)"}`;
                 this.value = '';
                 this.dispatchEvent(new Event('input', { bubbles: true }));
               }`
-            });
+            }, { signal: context.abort });
             for (const char of args.value) {
-              await client.send("Input.dispatchKeyEvent", { type: "keyDown", text: char });
-              await client.send("Input.dispatchKeyEvent", { type: "keyUp", text: char });
+              await client.send("Input.dispatchKeyEvent", { type: "keyDown", text: char }, { signal: context.abort });
+              await client.send("Input.dispatchKeyEvent", { type: "keyUp", text: char }, { signal: context.abort });
             }
             return `Filled [${args.uid}] "${node.name}" with "${args.value}"`;
           } finally {
@@ -15586,14 +15757,14 @@ ${result.result?.value ?? "(empty)"}`;
           target_id: tool.schema.string().optional().describe("Target ID"),
           expression: tool.schema.string().describe("JavaScript expression to evaluate")
         },
-        async execute(args) {
-          const { client } = await getClient(args.browser_url, args.target_id);
+        async execute(args, context) {
+          const { client } = await getClient(args.browser_url, args.target_id, context.abort);
           try {
             const result = await client.send("Runtime.evaluate", {
               expression: args.expression,
               returnByValue: true,
               awaitPromise: true
-            });
+            }, { signal: context.abort });
             if (result.exceptionDetails) {
               const err = result.exceptionDetails;
               return `Error: ${err.text ?? JSON.stringify(err)}`;
@@ -15613,10 +15784,10 @@ ${result.result?.value ?? "(empty)"}`;
           browser_url: tool.schema.string().describe("CDP HTTP endpoint"),
           target_id: tool.schema.string().optional().describe("Target ID")
         },
-        async execute(args) {
-          const { client } = await getClient(args.browser_url, args.target_id);
+        async execute(args, context) {
+          const { client } = await getClient(args.browser_url, args.target_id, context.abort);
           try {
-            const result = await client.send("Page.captureScreenshot", { format: "png" });
+            const result = await client.send("Page.captureScreenshot", { format: "png" }, { signal: context.abort });
             const data = result.data;
             if (!data)
               return "Failed to capture screenshot.";
